@@ -10,6 +10,7 @@ from datetime import datetime, date
 DATABASE_URL = os.environ.get('DATABASE_URL')
 # Chave secreta para sessões do Flask
 app = Flask(__name__)
+FLASK_SECRET_KEY = 'e205e9ea1d4aaf49f7b810ef5666d7aaffad3a9f1c66dbe4763e03faffef7b90'
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'chave-teste-super-secreta')
 ADMIN_KEY = 'barberflowadmin'
 FIXED_EXPENSES = 1500.00
@@ -1167,6 +1168,7 @@ HTML_TEMPLATE = f"""
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))  # Render define a porta automaticamente
     app.run(host='0.0.0.0', port=port, debug=True)  # debug=False em produção
+
 
 
 
