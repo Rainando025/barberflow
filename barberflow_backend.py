@@ -7,7 +7,7 @@ from datetime import datetime, date
 
 # --- 1. CONFIGURAÇÃO E CONEXÃO COM POSTGRESQL ---
 # Usar a variável de ambiente DATABASE_URL do Render
-DATABASE_URL = os.environ.get('postgresql://postgres_railway_internal_user:QrHsdZkFsSb8DKrVDsKCyWUvf4906SLR@dpg-d41mu80dl3ps73dilq30-a.ohio-postgres.render.com/postgres_railway_internal')  # Render define isso automaticamente
+DATABASE_URL = os.environ.get('postgresql://postgres:KaaBISeWZRpHQGvYKPaKYkhjCRkexcTf@postgres.railway.internal:5432/railway')  # Render define isso automaticamente
 
 # Chave secreta para sessões do Flask
 FLASK_SECRET_KEY = os.environ.get('e205e9ea1d4aaf49f7b810ef5666d7aaffad3a9f1c66dbe4763e03faffef7b90')  # opcional
@@ -1165,6 +1165,7 @@ HTML_TEMPLATE = f"""
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))  # Render define a porta automaticamente
     app.run(host='0.0.0.0', port=port, debug=True)  # debug=False em produção
+
 
 
 
