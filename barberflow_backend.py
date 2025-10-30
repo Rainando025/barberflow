@@ -525,7 +525,7 @@ HTML_TEMPLATE = f"""
                             <!-- Card 3: Despesas Fixas -->
                             <div class="bg-red-50 p-6 rounded-xl shadow-lg border-l-4 border-red-600">
                                 <p class="text-sm font-medium text-red-700">Despesas Fixas (Mock)</p>
-                                <p id="total-expenses" class="mt-1 text-3xl font-bold text-red-800">R$ {FIXED_EXPENSES:.2f}</p>
+                                <p id="total-expenses" class="mt-1 text-3xl font-bold text-red-800">R$ {{fixed_expenses}}</p>
                                 <p class="text-xs text-gray-500 mt-2">Simulação: Aluguel, produtos, etc.</p>
                             </div>
 
@@ -1165,6 +1165,7 @@ HTML_TEMPLATE = f"""
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))  # Render define a porta automaticamente
     app.run(host='0.0.0.0', port=port, debug=True)  # debug=False em produção
+
 
 
 
