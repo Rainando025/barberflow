@@ -6,27 +6,29 @@ from flask import Flask, request, jsonify, render_template_string, session, redi
 from datetime import datetime, date
 
 # --- 1. CONFIGURAÇÃO E CONEXÃO COM POSTGRESQL ---
-# Usar a variável de ambiente DATABASE_URL do Render
-DATABASE_URL = os.environ.get('DATABASE_URL')
-# Chave secreta para sessões do Flask
-app = Flask(__name__)
+# ATENÇÃO: Substitua estas variáveis pelas suas credenciais reais do PostgreSQL.
+DB_CONFIG = {
+    'database': os.environ.get('PG_DB', 'barberflow_db'),
+    'user': os.environ.get('PG_USER', 'postgres'),
+    'password': os.environ.get('PG_PASSWORD', ''),
+    'host': os.environ.get('PG_HOST', 'localhost'),
+    'port': os.environ.get('PG_PORT', '5433')
+}
+
+# Chave secreta para sessões do Flask. MUDE ESTA CHAVE em produção!
 FLASK_SECRET_KEY = 'e205e9ea1d4aaf49f7b810ef5666d7aaffad3a9f1c66dbe4763e03faffef7b90'
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'chave-teste-super-secreta')
 ADMIN_KEY = 'barberflowadmin'
 FIXED_EXPENSES = 1500.00
 
 def get_db_connection():
     """Cria e retorna uma conexão com o banco de dados."""
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(**DB_CONFIG)
         return conn
     except Exception as e:
         print(f"Erro ao conectar ao PostgreSQL: {e}")
+        # Em um ambiente real, você trataria este erro de forma mais robusta.
         return None
-
-# Inicialize Flask
-app = Flask(__name__)
-app.secret_key = FLASK_SECRET_KEY
 
 def initialize_db():
     """Cria as tabelas Services e Appointments se não existirem."""
@@ -528,7 +530,7 @@ HTML_TEMPLATE = f"""
                             <!-- Card 3: Despesas Fixas -->
                             <div class="bg-red-50 p-6 rounded-xl shadow-lg border-l-4 border-red-600">
                                 <p class="text-sm font-medium text-red-700">Despesas Fixas (Mock)</p>
-                                <p id="total-expenses" class="mt-1 text-3xl font-bold text-red-800">R$ {{fixed_expenses}}</p>
+                                <p id="total-expenses" class="mt-1 text-3xl font-bold text-red-800">R$ {FIXED_EXPENSES:.2f}</p>
                                 <p class="text-xs text-gray-500 mt-2">Simulação: Aluguel, produtos, etc.</p>
                             </div>
 
@@ -1166,16 +1168,7 @@ HTML_TEMPLATE = f"""
 
 # Se o script for executado diretamente, inicie o Flask
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))  # Render define a porta automaticamente
-    app.run(host='0.0.0.0', port=port, debug=True)  # debug=False em produção
-
-
-
-
-
-
-
-
-
-
-
+    # Simula a obtenção do role na inicialização (a rota /api/login POST faz o trabalho)
+    # Aqui forçamos a porta 5000, que é a padrão para o Flask.
+    # O debug deve ser desabilitado em produção.
+    app.run(debug=True)
