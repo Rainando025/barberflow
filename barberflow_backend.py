@@ -20,6 +20,31 @@ FLASK_SECRET_KEY = 'e205e9ea1d4aaf49f7b810ef5666d7aaffad3a9f1c66dbe4763e03faffef
 ADMIN_KEY = 'barberflowadmin'
 FIXED_EXPENSES = 1500.00
 
+# --- Configurações de Horário para Agendamento ---
+SHOP_HOURS = [
+    ("09:00", "12:00"), # Manhã
+    ("14:00", "18:00")  # Tarde
+]
+# Intervalo base para checagem de slots (todos os slots de agendamento devem ser múltiplos deste)
+SLOT_INTERVAL_MINUTES = 15 
+
+def time_to_minutes(time_str):
+    """Converte 'HH:MM' para minutos desde meia-noite."""
+    if not time_str: return 0
+    try:
+        H, M = map(int, time_str.split(':'))
+        return H * 60 + M
+    except ValueError:
+        return 0
+
+def minutes_to_time(total_minutes):
+    """Converte minutos desde meia-noite para 'HH:MM'."""
+    H = total_minutes // 60
+    M = total_minutes % 60
+    return f"{H:02d}:{M:02d}"
+# --- Fim das Funções de Horário ---
+
+
 def get_db_connection():
     """Cria e retorna uma conexão com o banco de dados."""
     try:
@@ -27,7 +52,6 @@ def get_db_connection():
         return conn
     except Exception as e:
         print(f"Erro ao conectar ao PostgreSQL: {e}")
-        # Em um ambiente real, você trataria este erro de forma mais robusta.
         return None
 
 def initialize_db():
@@ -38,7 +62,7 @@ def initialize_db():
 
     try:
         with conn.cursor() as cur:
-            # Tabela de Serviços (Visível para Clientes e Editável pelo Admin)
+            # Tabela de Serviços
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS services (
                     id SERIAL PRIMARY KEY,
@@ -48,7 +72,7 @@ def initialize_db():
                 );
             """)
 
-            # Tabela de Agendamentos (Usada pelo Cliente, Gerenciada pelo Admin)
+            # Tabela de Agendamentos (Adicionado UNIQUE constraint para evitar agendamentos duplicados)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS appointments (
                     id SERIAL PRIMARY KEY,
@@ -61,11 +85,12 @@ def initialize_db():
                     client_email VARCHAR(100),
                     service_price NUMERIC(10, 2) NOT NULL,
                     status VARCHAR(20) NOT NULL DEFAULT 'Agendado',
-                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (barber_id, appointment_date, appointment_time) -- Garante unicidade
                 );
             """)
             
-            # Tabela de Despesas Mensais (NOVO)
+            # Tabela de Despesas Mensais
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS monthly_expenses (
                     id SERIAL PRIMARY KEY,
@@ -78,6 +103,7 @@ def initialize_db():
             # Adicionar serviços mock se a tabela estiver vazia
             cur.execute("SELECT COUNT(*) FROM services;")
             if cur.fetchone()[0] == 0:
+                # Durations: Corte Simples (45 min), Design de Barba (30 min), Corte + Barba (75 min)
                 cur.execute("INSERT INTO services (name, price, duration) VALUES ('Corte Simples', 35.00, 45);")
                 cur.execute("INSERT INTO services (name, price, duration) VALUES ('Design de Barba', 25.00, 30);")
                 cur.execute("INSERT INTO services (name, price, duration) VALUES ('Corte + Barba', 55.00, 75);")
@@ -86,7 +112,6 @@ def initialize_db():
             # Adicionar despesas mock se a tabela estiver vazia
             cur.execute("SELECT COUNT(*) FROM monthly_expenses;")
             if cur.fetchone()[0] == 0:
-                # Inserir despesas mock para o mês atual
                 cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Aluguel (Mock)', 1200.00);")
                 cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Energia (Mock)', 200.00);")
                 print("Despesas mock inseridas.")
@@ -153,6 +178,7 @@ def manage_services():
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if request.method == 'GET':
+                # Inclui a duração do serviço, necessário para o cálculo de horários
                 cur.execute("SELECT id, name, price, duration FROM services ORDER BY name;")
                 services = cur.fetchall()
                 return jsonify(services)
@@ -198,11 +224,91 @@ def manage_services():
     finally:
         conn.close()
 
-# --- Rotas de Agendamentos (Admin e Cliente) (Mantidas, exceto o DELETE que foi corrigido no JS) ---
+# --- NOVA ROTA DE DISPONIBILIDADE ---
+
+@app.route('/api/availability', methods=['GET'])
+def get_available_times():
+    """Calcula e retorna os horários disponíveis para um barbeiro e uma data."""
+    barber_id = request.args.get('barberId')
+    appointment_date = request.args.get('date')
+    
+    # Adicionar o serviceId (não obrigatório, mas ajuda a refinar a lógica futura se necessário)
+    service_id = request.args.get('serviceId') 
+
+    if not barber_id or not appointment_date:
+        return jsonify({"message": "Barbeiro e data são obrigatórios."}), 400
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({'message': 'Erro de conexão com o banco de dados'}), 500
+
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # 1. Obter agendamentos bloqueadores (Agendado e Concluído)
+            # Cancelados ou Deletados não bloqueiam o horário.
+            cur.execute("""
+                SELECT 
+                    appointment_time, 
+                    service_name
+                FROM appointments
+                WHERE barber_id = %s 
+                AND appointment_date = %s 
+                AND status IN ('Agendado', 'Concluído');
+            """, (barber_id, appointment_date))
+            
+            booked_slots_raw = cur.fetchall()
+
+            # 2. Obter durações de serviço
+            cur.execute("SELECT name, duration FROM services;")
+            service_durations = {row['name']: row['duration'] for row in cur.fetchall()}
+            
+            # Mapear horários bloqueados (início e fim em minutos desde 00:00)
+            blocked_intervals = []
+            for slot in booked_slots_raw:
+                start_minutes = time_to_minutes(slot['appointment_time'])
+                # Duração padrão de 60 minutos se o serviço não for encontrado, por segurança
+                duration = service_durations.get(slot['service_name'], 60) 
+                end_minutes = start_minutes + duration
+                blocked_intervals.append((start_minutes, end_minutes))
+
+            # 3. Gerar todos os possíveis horários de início de agendamento 
+            available_times = []
+            
+            for start_time_str, end_time_str in SHOP_HOURS:
+                current_minutes = time_to_minutes(start_time_str)
+                end_minutes = time_to_minutes(end_time_str)
+                
+                # O loop itera pelos possíveis inícios de slot, no intervalo de SLOT_INTERVAL_MINUTES
+                while current_minutes < end_minutes:
+                    current_time_str = minutes_to_time(current_minutes)
+                    
+                    is_blocked = False
+                    # Checamos se o ponto de início (current_minutes) cai dentro de um intervalo bloqueado
+                    for start_blocked, end_blocked in blocked_intervals:
+                        # Se o início do slot atual for >= ao início do slot bloqueado 
+                        # E se o início do slot atual for < ao fim do slot bloqueado (conflito)
+                        if current_minutes >= start_blocked and current_minutes < end_blocked:
+                            is_blocked = True
+                            break
+
+                    if not is_blocked:
+                        available_times.append(current_time_str)
+                        
+                    current_minutes += SLOT_INTERVAL_MINUTES
+                    
+            # 5. Retorna apenas os horários de início que não estão bloqueados
+            return jsonify(available_times), 200
+
+    except Exception as e:
+        print(f"Erro ao calcular disponibilidade: {e}")
+        return jsonify({'message': f'Erro interno: {e}'}), 500
+    finally:
+        conn.close()
+
+# --- Rotas de Agendamentos (Mantidas) ---
 
 @app.route('/api/appointments', methods=['GET', 'POST'])
 def manage_appointments():
-    # ... (Corpo da função manage_appointments é mantido)
     conn = get_db_connection()
     if conn is None:
         return jsonify({'message': 'Erro de conexão com o banco de dados'}), 500
@@ -232,6 +338,7 @@ def manage_appointments():
                 client_email = data.get('clientEmail')
                 service_price = data.get('servicePrice')
                 
+                # O banco de dados agora tem uma restrição UNIQUE para evitar colisões
                 cur.execute("""
                     INSERT INTO appointments (barber_id, service_name, appointment_date, appointment_time, client_name, client_phone, client_email, service_price)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
@@ -241,6 +348,9 @@ def manage_appointments():
                 conn.commit()
                 return jsonify({'message': f'Agendamento submetido com ID {new_id}.', 'id': new_id}), 201
 
+    except psycopg2.IntegrityError:
+        conn.rollback()
+        return jsonify({'message': 'Horário já agendado. Por favor, escolha outro horário.'}), 409
     except Exception as e:
         conn.rollback()
         print(f"Erro na gestão de agendamentos: {e}")
@@ -250,7 +360,6 @@ def manage_appointments():
 
 @app.route('/api/appointments/<int:id>/status', methods=['PUT'])
 def update_appointment_status(id):
-    # ... (Corpo da função update_appointment_status é mantido)
     if get_role() != 'admin':
         return jsonify({'message': 'Acesso negado. Apenas Barbeiros (Admin) podem atualizar status.'}), 403
 
@@ -276,7 +385,7 @@ def update_appointment_status(id):
     finally:
         conn.close()
 
-# --- NOVAS ROTAS DE DESPESAS (Admin) ---
+# --- ROTAS DE DESPESAS (Mantidas) ---
 
 @app.route('/api/expenses', methods=['GET', 'POST'])
 def manage_expenses():
@@ -301,9 +410,7 @@ def manage_expenses():
                 """)
                 expenses = cur.fetchall()
                 for exp in expenses:
-                    # Converte o objeto date do Python para string no formato 'YYYY-MM-DD'
                     exp['expense_date'] = exp['expense_date'].strftime('%Y-%m-%d')
-                    # Garante que o valor é um float
                     exp['amount'] = float(exp['amount'])
                 return jsonify(expenses)
 
@@ -311,7 +418,6 @@ def manage_expenses():
                 data = request.get_json()
                 description = data.get('description')
                 amount = data.get('amount')
-                # Usa a data atual ou a data fornecida
                 expense_date = data.get('date', datetime.now().strftime('%Y-%m-%d'))
                 
                 cur.execute("""
@@ -356,7 +462,7 @@ def delete_expense(id):
         conn.close()
 
 
-# --- ROTA DO DASHBOARD (ATUALIZADA) ---
+# --- ROTA DO DASHBOARD (Mantida) ---
 
 @app.route('/api/dashboard', methods=['GET'])
 def get_dashboard_data():
@@ -370,7 +476,6 @@ def get_dashboard_data():
 
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # Data Inicial do Mês
             first_day_of_month = date.today().replace(day=1).strftime('%Y-%m-%d')
             
             # 1. Receita Total e Agendamentos Concluídos do Mês
@@ -425,7 +530,7 @@ def get_dashboard_data():
                 'completedAppointments': completed_count,
                 'totalExpenses': total_expenses,
                 'netIncome': net_income,
-                'dailyData': daily_data # Novo dado para o gráfico
+                'dailyData': daily_data 
             })
 
     except Exception as e:
@@ -435,7 +540,7 @@ def get_dashboard_data():
         conn.close()
 
 
-# --- 3. CONTEÚDO HTML E JAVASCRIPT (ATUALIZADO) ---
+# --- 3. CONTEÚDO HTML E JAVASCRIPT (ATUALIZADO PARA DISPONIBILIDADE) ---
 
 # O frontend é injetado como um template de string em Flask.
 HTML_TEMPLATE = f"""
@@ -540,9 +645,9 @@ HTML_TEMPLATE = f"""
                         </div>
                     </div>
 
-                    <!-- Passo 2: Data e Hora -->
+                    <!-- Passo 2: Data e Hora (Horário dinâmico) -->
                     <div>
-                        <h3 class="text-lg font-semibold text-gray-800 mb-3 mt-4">Data e Hora</h3>
+                        <h3 class="text-lg font-semibold text-gray-800 mb-3 mt-4">Data e Horário Disponível</h3>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label for="date" class="block text-sm font-medium text-gray-700">Data Desejada</label>
@@ -551,11 +656,7 @@ HTML_TEMPLATE = f"""
                             <div>
                                 <label for="time" class="block text-sm font-medium text-gray-700">Horários Disponíveis</label>
                                 <select id="time" required class="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500 sm:text-sm">
-                                    <option value="">-- Selecione o Horário --</option>
-                                    <option value="09:00">09:00</option>
-                                    <option value="10:30">10:30</option>
-                                    <option value="14:00">14:00</option>
-                                    <option value="15:30">15:30</option>
+                                    <option value="">-- Selecione um Barbeiro e Data --</option>
                                 </select>
                             </div>
                         </div>
@@ -644,7 +745,7 @@ HTML_TEMPLATE = f"""
                         </ul>
                     </div>
 
-                    <!-- 2.3. Gerenciamento de Despesas (NOVA ABA) -->
+                    <!-- 2.3. Gerenciamento de Despesas -->
                     <div id="expenses-tab" class="tab-content hidden">
                         <h3 class="text-xl font-semibold text-gray-800 mb-4">Gerenciar Despesas do Mês</h3>
                         
@@ -681,7 +782,7 @@ HTML_TEMPLATE = f"""
                     </div>
 
 
-                    <!-- 2.4. Dashboard e Fluxo de Caixa (ATUALIZADO) -->
+                    <!-- 2.4. Dashboard e Fluxo de Caixa -->
                     <div id="dashboard-tab" class="tab-content hidden">
                         <h3 class="text-xl font-semibold text-gray-800 mb-4">Dashboard Financeiro (Mês Atual)</h3>
                         
@@ -701,7 +802,7 @@ HTML_TEMPLATE = f"""
                                 <p class="text-xs text-gray-500 mt-2">Agendamentos finalizados (pagos) no mês.</p>
                             </div>
 
-                            <!-- Card 3: Despesas Mensais (DINÂMICO) -->
+                            <!-- Card 3: Despesas Mensais -->
                             <div class="bg-red-50 p-6 rounded-xl shadow-lg border-l-4 border-red-600">
                                 <p class="text-sm font-medium text-red-700">Despesas Totais (Mês)</p>
                                 <p id="total-expenses" class="mt-1 text-3xl font-bold text-red-800">R$ 0,00</p>
@@ -761,8 +862,11 @@ HTML_TEMPLATE = f"""
         let userRole = 'none'; 
         const ADMIN_KEY = '{ADMIN_KEY}'; // Injetado do Python
         let revenueChartInstance = null; // Instância global do Chart.js
-
-        // --- Funções de UI e Navegação ---
+        
+        // Estado do Agendamento
+        let selectedServiceId = null; 
+        
+        // --- Funções de UI e Navegação (Mantidas) ---
         let currentView = 'schedule';
         let currentAdminTab = 'appointments';
 
@@ -777,10 +881,10 @@ HTML_TEMPLATE = f"""
             
             const titleElement = document.getElementById('modal-title');
             if (isSuccess) {{
-                titleElement.classList.remove('text-red-700', 'text-green-700');
+                titleElement.classList.remove('text-red-700', 'text-gray-900');
                 titleElement.classList.add('text-green-700');
             }} else {{
-                titleElement.classList.remove('text-green-700', 'text-red-700');
+                titleElement.classList.remove('text-green-700', 'text-gray-900');
                 titleElement.classList.add('text-red-700');
             }}
             modal.classList.remove('hidden');
@@ -923,9 +1027,86 @@ HTML_TEMPLATE = f"""
 
 
         // ----------------------------------------------------------------------
-        // LÓGICA DO CLIENTE (AGENDAMENTO) - Comunicação com Flask API (Mantida)
+        // LÓGICA DO CLIENTE (AGENDAMENTO) - Disponibilidade de Horário (NOVO)
         // ----------------------------------------------------------------------
+        
+        function setupTimeListeners() {{
+            const barberSelect = document.getElementById('barber');
+            const dateInput = document.getElementById('date');
+            const serviceSelect = document.getElementById('service');
+            
+            // Garante que a data mínima é hoje
+            const today = new Date().toISOString().split('T')[0];
+            dateInput.min = today;
 
+            // Limpa listeners existentes e adiciona uma vez
+            if (!barberSelect.hasAttribute('data-listener-added')) {{
+                barberSelect.addEventListener('change', loadAvailableTimes);
+                dateInput.addEventListener('change', loadAvailableTimes);
+                serviceSelect.addEventListener('change', updateServiceDetails);
+
+                barberSelect.setAttribute('data-listener-added', 'true');
+            }}
+        }}
+        
+        function updateServiceDetails() {{
+            const serviceSelect = document.getElementById('service');
+            const selectedOption = serviceSelect.options[serviceSelect.selectedIndex];
+            
+            selectedServiceId = null;
+
+            if (selectedOption && selectedOption.value) {{
+                selectedServiceId = parseInt(selectedOption.value);
+            }}
+
+            // Após selecionar o serviço, recarrega os horários (porque a duração é usada no backend)
+            loadAvailableTimes();
+        }}
+        
+        async function loadAvailableTimes() {{
+            const barberId = document.getElementById('barber').value;
+            const date = document.getElementById('date').value;
+            const timeSelect = document.getElementById('time');
+            
+            timeSelect.innerHTML = '<option value="">-- Selecione um Barbeiro e Data --</option>';
+
+            if (!barberId || !date) {{
+                return;
+            }}
+
+            timeSelect.innerHTML = '<option value="" disabled>-- Buscando horários... --</option>';
+            showLoading(true);
+
+            try {{
+                // Note: O serviceId pode ser opcional aqui, mas o backend já faz o cálculo com base nos serviços agendados
+                const response = await fetch(`/api/availability?barberId=${{barberId}}&date=${{date}}`);
+                const availableTimes = await response.json();
+
+                timeSelect.innerHTML = '<option value="">-- Selecione o Horário --</option>';
+                
+                if (!response.ok) {{
+                    throw new Error(availableTimes.message || 'Erro ao carregar horários.');
+                }}
+
+                if (availableTimes.length === 0) {{
+                    timeSelect.innerHTML = '<option value="" disabled>-- Nenhum horário disponível. --</option>';
+                }} else {{
+                    availableTimes.forEach(time => {{
+                        const option = document.createElement('option');
+                        option.value = time;
+                        option.textContent = time;
+                        timeSelect.appendChild(option);
+                    }});
+                }}
+
+            }} catch (error) {{
+                console.error("Erro ao carregar horários:", error);
+                timeSelect.innerHTML = `<option value="" disabled>-- Erro ao carregar horários. --</option>`;
+            }} finally {{
+                showLoading(false);
+            }}
+        }}
+        
         async function loadClientServices() {{
             const serviceSelect = document.getElementById('service');
             serviceSelect.innerHTML = '<option value="">-- Carregando Serviços... --</option>';
@@ -945,8 +1126,11 @@ HTML_TEMPLATE = f"""
                     option.textContent = `${{service.name}} (R$ ${{formattedPrice.replace('.', ',')}} - ${{service.duration}} min)`;
                     option.setAttribute('data-price', formattedPrice);
                     option.setAttribute('data-name', service.name);
+                    option.setAttribute('data-duration', service.duration); // Duração adicionada
                     serviceSelect.appendChild(option);
                 }});
+                setupTimeListeners(); // Configura os listeners após o carregamento
+                
             }} catch (error) {{
                 console.error("Erro ao carregar serviços:", error);
                 serviceSelect.innerHTML = '<option value="">-- Erro ao carregar serviços --</option>';
@@ -966,12 +1150,17 @@ HTML_TEMPLATE = f"""
             
             const servicePrice = parseFloat(serviceOption.getAttribute('data-price'));
             const serviceName = serviceOption.getAttribute('data-name');
+            const selectedTime = form.time.value; // Horário escolhido pelo cliente
+            
+            if (!selectedTime) {{
+                return openModal('Erro', 'Selecione um horário disponível antes de agendar.', false);
+            }}
 
             const appointmentData = {{
                 barberId: form.barber.value, 
                 serviceName: serviceName,
                 date: form.date.value,
-                time: form.time.value,
+                time: selectedTime,
                 clientName: form['client-name'].value,
                 clientPhone: form['client-phone'].value,
                 clientEmail: form['client-email'].value,
@@ -993,7 +1182,11 @@ HTML_TEMPLATE = f"""
                 if (!response.ok) throw new Error(result.message || 'Erro ao agendar.');
                 
                 openModal('Agendamento Confirmado!', `Seu agendamento para ${{appointmentData.date}} às ${{appointmentData.time}} foi confirmado. Barbeiro: ${{form.barber.options[form.barber.selectedIndex].text.split('(')[0].trim()}}`, true);
+                
+                // Recarrega os horários disponíveis após o agendamento
+                loadAvailableTimes(); 
                 form.reset();
+                document.getElementById('date').valueAsDate = new Date(); // Garante a data mínima após reset
                 
             }} catch (error) {{
                 console.error("Erro ao submeter agendamento:", error);
@@ -1006,12 +1199,11 @@ HTML_TEMPLATE = f"""
 
 
         // ----------------------------------------------------------------------
-        // LÓGICA DO BARBEIRO (ADMIN) - Comunicação com Flask API
+        // LÓGICA DO BARBEIRO (ADMIN) - (Mantida)
         // ----------------------------------------------------------------------
         
         function loadAdminData() {{
             if (userRole !== 'admin') return; 
-            // Carrega a aba padrão
             changeAdminTab('appointments');
         }}
 
@@ -1065,7 +1257,7 @@ HTML_TEMPLATE = f"""
                     appointmentsListEl.insertAdjacentHTML('beforeend', appointmentHtml);
                 }});
 
-                loadCashFlow(); // Recarrega o dashboard
+                loadCashFlow();
             }} catch (error) {{
                 console.error("Erro ao carregar agendamentos:", error);
                 openModal('Erro de Dados', error.message, false);
@@ -1096,22 +1288,18 @@ HTML_TEMPLATE = f"""
             }}
         }}
 
-        // NOTE: deleteAppointment foi removido pois não há rota DELETE para agendamentos na versão atual do backend.
+        // --- Lógica de Dashboard, Serviços e Despesas (Mantidas) ---
 
-        // --- Lógica do Dashboard (ATUALIZADA) ---
-        
-        let myChart; // Variável para a instância do Chart.js
+        let myChart;
         
         function renderChart(dailyData) {{
             const canvas = document.getElementById('revenueChart');
             
-            // Destrói a instância anterior do gráfico, se existir
             if (myChart) {{
                 myChart.destroy();
             }}
             
             const labels = dailyData.map(d => {{
-                 // Formata a data para DD/MM
                 const parts = d.date.split('-');
                 return `${{parts[2]}}/${{parts[1]}}`; 
             }});
@@ -1126,16 +1314,16 @@ HTML_TEMPLATE = f"""
                         {{
                             label: 'Receita (R$)',
                             data: revenueData,
-                            backgroundColor: 'rgba(220, 38, 38, 0.7)', // Vermelho do BarberFlow
+                            backgroundColor: 'rgba(220, 38, 38, 0.7)', 
                             borderColor: 'rgba(220, 38, 38, 1)',
                             yAxisID: 'yRevenue',
                         }},
                         {{
                             label: 'Cortes Concluídos',
                             data: appointmentsData,
-                            backgroundColor: 'rgba(59, 130, 246, 0.7)', // Azul
+                            backgroundColor: 'rgba(59, 130, 246, 0.7)', 
                             borderColor: 'rgba(59, 130, 246, 1)',
-                            type: 'line', // Linha para contagem
+                            type: 'line',
                             yAxisID: 'yAppointments',
                             tension: 0.3
                         }}
@@ -1183,7 +1371,6 @@ HTML_TEMPLATE = f"""
                 document.getElementById('total-revenue').textContent = format(data.totalRevenue);
                 document.getElementById('total-appointments').textContent = data.completedAppointments.toString();
                 
-                // NOVO: Despesas e Lucro Líquido
                 document.getElementById('total-expenses').textContent = format(data.totalExpenses);
                 document.getElementById('net-income').textContent = format(data.netIncome);
 
@@ -1201,7 +1388,6 @@ HTML_TEMPLATE = f"""
                     netIncomeText.classList.add('text-red-800');
                 }}
                 
-                // NOVO: Renderiza o gráfico com dados diários
                 renderChart(data.dailyData);
                 
             }} catch (error) {{
@@ -1210,11 +1396,8 @@ HTML_TEMPLATE = f"""
             }}
         }}
 
-        // --- Lógica de Serviços (Mantida) ---
-
         async function loadServicesList() {{
             if (userRole !== 'admin') return; 
-            // ... (função loadServicesList é mantida)
             const servicesListEl = document.getElementById('current-services-list');
             servicesListEl.innerHTML = '<li class="text-center text-gray-500 p-4">Carregando lista de serviços...</li>';
 
@@ -1256,7 +1439,6 @@ HTML_TEMPLATE = f"""
         }}
         
         async function handleServiceSubmit(event) {{
-            // ... (função handleServiceSubmit é mantida)
             event.preventDefault();
             if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem gerenciar serviços.', false);
             
@@ -1297,7 +1479,6 @@ HTML_TEMPLATE = f"""
         }}
         
         function editService(id, name, price, duration) {{
-            // ... (função editService é mantida)
             if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem editar serviços.', false);
             document.getElementById('service-doc-id').value = id;
             document.getElementById('service-name').value = name;
@@ -1308,7 +1489,6 @@ HTML_TEMPLATE = f"""
         }}
 
         function clearServiceForm() {{
-            // ... (função clearServiceForm é mantida)
             document.getElementById('service-doc-id').value = '';
             document.getElementById('service-name').value = '';
             document.getElementById('service-price').value = '';
@@ -1318,7 +1498,6 @@ HTML_TEMPLATE = f"""
         }}
 
         async function deleteService(id, name) {{
-            // ... (função deleteService é mantida)
             if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem excluir serviços.', false);
             
             showLoading(true);
@@ -1341,8 +1520,6 @@ HTML_TEMPLATE = f"""
                 showLoading(false);
             }}
         }}
-
-        // --- Lógica de Despesas (NOVA) ---
 
         async function loadExpenses() {{
             if (userRole !== 'admin') return; 
@@ -1382,7 +1559,6 @@ HTML_TEMPLATE = f"""
                     expensesListEl.insertAdjacentHTML('beforeend', listItem);
                 }});
 
-                // Adicionar linha de total
                 expensesListEl.insertAdjacentHTML('beforeend', `
                     <tr class="bg-gray-100 font-bold">
                         <td class="px-6 py-4 whitespace-nowrap text-base text-gray-900" colspan="2">TOTAL DESPESAS (MÊS)</td>
@@ -1425,8 +1601,9 @@ HTML_TEMPLATE = f"""
                 
                 openModal('Despesa Adicionada', result.message, true);
                 form.reset();
-                loadExpenses(); // Recarrega a lista
-                loadCashFlow(); // Atualiza o dashboard
+                document.getElementById('expense-date').valueAsDate = new Date();
+                loadExpenses();
+                loadCashFlow(); 
                 
             }} catch (error) {{
                 console.error("Erro ao adicionar despesa:", error);
@@ -1449,8 +1626,8 @@ HTML_TEMPLATE = f"""
                 if (!response.ok) throw new Error(result.message || 'Erro ao excluir.');
 
                 openModal('Despesa Excluída', `Despesa "${{description}}" excluída com sucesso.`, true);
-                loadExpenses(); // Recarrega a lista
-                loadCashFlow(); // Atualiza o dashboard
+                loadExpenses();
+                loadCashFlow();
             }} catch (error) {{
                 console.error("Erro ao excluir despesa:", error);
                 openModal('Erro', `Não foi possível excluir a despesa. ${{error.message}}`, false);
@@ -1461,10 +1638,8 @@ HTML_TEMPLATE = f"""
 
         // --- Inicialização da Aplicação (Mantida) ---
         window.onload = function() {{
-            // Define a data atual no campo de despesa
             document.getElementById('expense-date').valueAsDate = new Date();
 
-            // Checa se já existe uma sessão de usuário ao carregar a página
             fetch('/api/login', {{ method: 'GET' }})
                 .then(response => response.json())
                 .then(data => {{
@@ -1501,11 +1676,8 @@ HTML_TEMPLATE = f"""
         window.clearServiceForm = clearServiceForm;
         window.editService = editService;
         window.deleteService = deleteService;
-        
-        // Expondo novas funções de despesa
         window.handleExpenseSubmit = handleExpenseSubmit;
         window.deleteExpense = deleteExpense;
-        
         window.handleRoleSelection = handleRoleSelection;
         window.handleAdminLogin = handleAdminLogin;
         window.logout = logout;
@@ -1518,4 +1690,3 @@ HTML_TEMPLATE = f"""
 # Se o script for executado diretamente, inicie o Flask
 if __name__ == '__main__':
     app.run(debug=True)
-
