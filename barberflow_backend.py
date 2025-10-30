@@ -8,7 +8,13 @@ from datetime import datetime, date
 from dotenv import load_dotenv
 
 load_dotenv()
+app = Flask(__name__)
 
+# Conexão com banco do Railway
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('postgresql://postgres:KaaBISeWZRpHQGvYKPaKYkhjCRkexcTf@postgres.railway.internal:5432/railway')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db = SQLAlchemy(app)
 # --- 1. CONFIGURAÇÃO E CONEXÃO COM POSTGRESQL ---
 # ATENÇÃO: Substitua estas variáveis pelas suas credenciais reais do PostgreSQL.
 DB_CONFIG = {
@@ -1176,3 +1182,4 @@ if __name__ == '__main__':
     # Aqui forçamos a porta 5000, que é a padrão para o Flask.
     # O debug deve ser desabilitado em produção.
     app.run(debug=True)
+
