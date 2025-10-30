@@ -1163,9 +1163,9 @@ HTML_TEMPLATE = f"""
 
 # Se o script for executado diretamente, inicie o Flask
 if __name__ == '__main__':
-    # Simula a obtenção do role na inicialização (a rota /api/login POST faz o trabalho)
-    # Aqui forçamos a porta 5000, que é a padrão para o Flask.
-    # O debug deve ser desabilitado em produção.
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))  # Render define a porta automaticamente
+    app.run(host='0.0.0.0', port=port, debug=True)  # debug=False em produção
+
+
 
 
