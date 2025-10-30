@@ -5,40 +5,25 @@ import psycopg2.extras
 from flask import Flask, request, jsonify, render_template_string, session, redirect, url_for
 from datetime import datetime, date
 
-from dotenv import load_dotenv
-
-load_dotenv()
-app = Flask(__name__)
-
-# Conexão com banco do Railway
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('postgresql://postgres:KaaBISeWZRpHQGvYKPaKYkhjCRkexcTf@postgres.railway.internal:5432/railway')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-db = SQLAlchemy(app)
 # --- 1. CONFIGURAÇÃO E CONEXÃO COM POSTGRESQL ---
-# ATENÇÃO: Substitua estas variáveis pelas suas credenciais reais do PostgreSQL.
-DB_CONFIG = {
-    'database': os.getenv('PG_DB'),
-    'user': os.getenv('PG_USER'),
-    'password': os.getenv('PG_PASSWORD'),
-    'host': os.getenv('PG_HOST'),
-    'port': os.getenv('PG_PORT')
-}
+# Usar a variável de ambiente DATABASE_URL do Render
+DATABASE_URL = os.environ.get('postgresql://postgres_railway_internal_user:QrHsdZkFsSb8DKrVDsKCyWUvf4906SLR@dpg-d41mu80dl3ps73dilq30-a.ohio-postgres.render.com/postgres_railway_internal')  # Render define isso automaticamente
 
-# Chave secreta para sessões do Flask. MUDE ESTA CHAVE em produção!
-FLASK_SECRET_KEY = 'e205e9ea1d4aaf49f7b810ef5666d7aaffad3a9f1c66dbe4763e03faffef7b90'
-ADMIN_KEY = 'barberflowadmin'
-FIXED_EXPENSES = 1500.00
+# Chave secreta para sessões do Flask
+FLASK_SECRET_KEY = os.environ.get('e205e9ea1d4aaf49f7b810ef5666d7aaffad3a9f1c66dbe4763e03faffef7b90')  # opcional
 
 def get_db_connection():
     """Cria e retorna uma conexão com o banco de dados."""
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
+        conn = psycopg2.connect(DATABASE_URL)
         return conn
     except Exception as e:
         print(f"Erro ao conectar ao PostgreSQL: {e}")
-        # Em um ambiente real, você trataria este erro de forma mais robusta.
         return None
+
+# Inicialize Flask
+app = Flask(__name__)
+app.secret_key = FLASK_SECRET_KEY
 
 def initialize_db():
     """Cria as tabelas Services e Appointments se não existirem."""
@@ -1182,4 +1167,5 @@ if __name__ == '__main__':
     # Aqui forçamos a porta 5000, que é a padrão para o Flask.
     # O debug deve ser desabilitado em produção.
     app.run(debug=True)
+
 
