@@ -9,7 +9,8 @@ from datetime import datetime, date
 # Usar a variável de ambiente DATABASE_URL do Render
 DATABASE_URL = os.environ.get('DATABASE_URL')
 # Chave secreta para sessões do Flask
-FLASK_SECRET_KEY = os.environ.get('e205e9ea1d4aaf49f7b810ef5666d7aaffad3a9f1c66dbe4763e03faffef7b90')  # opcional
+app = Flask(__name__)
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'chave-teste-super-secreta')
 ADMIN_KEY = 'barberflowadmin'
 FIXED_EXPENSES = 1500.00
 
@@ -1166,6 +1167,7 @@ HTML_TEMPLATE = f"""
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))  # Render define a porta automaticamente
     app.run(host='0.0.0.0', port=port, debug=True)  # debug=False em produção
+
 
 
 
