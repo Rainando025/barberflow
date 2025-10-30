@@ -5,14 +5,18 @@ import psycopg2.extras
 from flask import Flask, request, jsonify, render_template_string, session, redirect, url_for
 from datetime import datetime, date
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # --- 1. CONFIGURAÇÃO E CONEXÃO COM POSTGRESQL ---
 # ATENÇÃO: Substitua estas variáveis pelas suas credenciais reais do PostgreSQL.
 DB_CONFIG = {
-    'database': os.environ.get('PG_DB', 'barberflow_db'),
-    'user': os.environ.get('PG_USER', 'postgres'),
-    'password': os.environ.get('PG_PASSWORD', 'wordKey##'),
-    'host': os.environ.get('PG_HOST', 'localhost'),
-    'port': os.environ.get('PG_PORT', '5433')
+    'database': os.getenv('PG_DB'),
+    'user': os.getenv('PG_USER'),
+    'password': os.getenv('PG_PASSWORD'),
+    'host': os.getenv('PG_HOST'),
+    'port': os.getenv('PG_PORT')
 }
 
 # Chave secreta para sessões do Flask. MUDE ESTA CHAVE em produção!
