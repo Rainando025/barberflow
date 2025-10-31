@@ -368,7 +368,7 @@ def manage_expenses():
                 """)
                 expenses = cur.fetchall()
                 for exp in expenses:
-                    exp['expense_date'] = exp['expense_date'].strftime('%Y-%m-%d')
+                    exp['expense_date'] = exp['expense_date'].strftime('%d-%m-%Y')
                     exp['amount'] = float(exp['amount'])
                 return jsonify(expenses)
 
@@ -376,7 +376,7 @@ def manage_expenses():
                 data = request.get_json()
                 description = data.get('description')
                 amount = data.get('amount')
-                expense_date = data.get('date', datetime.now().strftime('%Y-%m-%d'))
+                expense_date = data.get('date', datetime.now().strftime('%d-%m-%Y'))
                 
                 cur.execute("""
                     INSERT INTO monthly_expenses (description, amount, expense_date)
@@ -673,7 +673,7 @@ HTML_TEMPLATE = f"""
 
             <!-- 2. VISTA DO BARBEIRO (ADMIN) -->
             <div id="admin-view" class="hidden bg-black p-6 md:p-10 rounded-xl shadow-2xl border-t-4 border-red-600">
-                <h2 class="text-3xl font-bold text-orange-800 mb-6">Painel do Barbeiro</h2>
+                <h2 class="text-3xl font-bold text-yellow-800 mb-6">Painel do Barbeiro</h2>
                 <p id="admin-role-warning" class="bg-red-100 border-l-4 border-red-500 text-orange-700 p-3 mb-4 hidden" role="alert">
                     <span class="font-bold">Atenção:</span> Você não possui permissão de Barbeiro (Admin) para acessar esta aba.
                 </p>
@@ -1685,6 +1685,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
