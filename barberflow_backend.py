@@ -565,7 +565,7 @@ HTML_TEMPLATE = f"""
                 <div class="flex flex-col items-center space-y-4 mb-6">
                   <!-- LOGO opcional -->
                   <div class="bg-black border-2 border-yellow-500 rounded-full p-2">
-                    <img src="logo.png" alt="Logo BarberFlow" onerror="this.style.display='none'"
+                    <img src="https://raw.githubusercontent.com/Rainando025/barberflow/refs/heads/main/logo.png" alt="Logo BarberFlow" onerror="this.style.display='none'"
                          class="w-24 h-24 rounded-full object-cover shadow-lg">
                   </div>
                   <h2 class="text-3xl font-extrabold text-yellow-400 tracking-wide text-center">
@@ -1682,6 +1682,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
