@@ -622,7 +622,7 @@ HTML_TEMPLATE = f"""
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label for="barber" class="block text-sm font-medium text-yellow-500">Escolha o Barbeiro</label>
-                                <select id="barber" required class="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
+                                <select id="barber" required class="mt-1 block w-full pl-3 pr-10 py-3 text-black border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
                                     <option value="">-- Selecione o Profissional --</option>
                                     <option value="barber1">João (Especialista em Fade)</option>
                                     <option value="barber2">Pedro (Especialista em Clássico)</option>
@@ -1685,6 +1685,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
