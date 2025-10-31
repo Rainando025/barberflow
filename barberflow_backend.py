@@ -672,9 +672,9 @@ HTML_TEMPLATE = f"""
 
 
             <!-- 2. VISTA DO BARBEIRO (ADMIN) -->
-            <div id="admin-view" class="hidden bg-white p-6 md:p-10 rounded-xl shadow-2xl border-t-4 border-red-600">
+            <div id="admin-view" class="hidden bg-black p-6 md:p-10 rounded-xl shadow-2xl border-t-4 border-red-600">
                 <h2 class="text-3xl font-bold text-gray-800 mb-6">Painel do Barbeiro</h2>
-                <p id="admin-role-warning" class="bg-red-100 border-l-4 border-red-500 text-red-700 p-3 mb-4 hidden" role="alert">
+                <p id="admin-role-warning" class="bg-red-100 border-l-4 border-red-500 text-orange-700 p-3 mb-4 hidden" role="alert">
                     <span class="font-bold">Atenção:</span> Você não possui permissão de Barbeiro (Admin) para acessar esta aba.
                 </p>
 
@@ -1685,6 +1685,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
