@@ -613,28 +613,62 @@ HTML_TEMPLATE = f"""
               </div>
             </div>
 
-            <!-- 1. VISTA DO CLIENTE (AGENDAMENTO) -->
-            <div id="schedule-view" class="hidden bg-white p-6 md:p-10 rounded-xl shadow-2xl border-t-4 border-red-600">
-                <h2 class="text-3xl font-bold text-gray-800 mb-6 border-b pb-2">Agendamento Online</h2>
-                <form id="appointment-form" onsubmit="handleAppointmentSubmit(event)" class="space-y-6">
-                    
-                    <!-- Passo 1: Barbeiro e Serviço -->
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                            <label for="barber" class="block text-sm font-medium text-gray-700">Escolha o Barbeiro</label>
-                            <select id="barber" required class="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
-                                <option value="">-- Selecione o Profissional --</option>
-                                <option value="barber1">João (Especialista em Fade)</option>
-                                <option value="barber2">Pedro (Especialista em Clássico)</option>
-                            </select>
+                <!-- 1. VISTA DO CLIENTE (AGENDAMENTO) -->
+                <div id="schedule-view" class="hidden bg-black p-6 md:p-10 rounded-xl shadow-2xl border-t-4 border-red-600">
+                    <h2 class="text-3xl font-bold text-white mb-6 border-b pb-2">Agendamento Online</h2>
+                    <form id="appointment-form" onsubmit="handleAppointmentSubmit(event)" class="space-y-6">
+                        
+                        <!-- Passo 1: Barbeiro e Serviço -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label for="barber" class="block text-sm font-medium text-yellow-500">Escolha o Barbeiro</label>
+                                <select id="barber" required class="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
+                                    <option value="">-- Selecione o Profissional --</option>
+                                    <option value="barber1">João (Especialista em Fade)</option>
+                                    <option value="barber2">Pedro (Especialista em Clássico)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="service" class="block text-sm font-medium text-yellow-500">Escolha o Corte/Serviço</label>
+                                <select id="service" required class="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
+                                    <option value="">-- Carregando Serviços... --</option>
+                                </select>
+                            </div>
                         </div>
+    
+                        <!-- Passo 2: Data e Hora (Horário dinâmico) -->
                         <div>
-                            <label for="service" class="block text-sm font-medium text-gray-700">Escolha o Corte/Serviço</label>
-                            <select id="service" required class="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
-                                <option value="">-- Carregando Serviços... --</option>
-                            </select>
+                            <h3 class="text-lg font-semibold text-white mb-3 mt-4">Data e Horário Disponível</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <label for="date" class="block text-sm font-medium text-yellow-500">Data Desejada</label>
+                                    <input type="date" id="date" required class="mt-1 block w-full py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                </div>
+                                <div>
+                                    <label for="time" class="block text-sm font-medium text-yellow-500">Horários Disponíveis</label>
+                                    <select id="time" required class="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500 sm:text-sm">
+                                        <option value="">-- Selecione um Barbeiro e Data --</option>
+                                    </select>
+                                </div>
+                            </div>
                         </div>
-                    </div>
+    
+                        <!-- Passo 3: Dados do Cliente -->
+                        <div>
+                            <h3 class="text-lg font-semibold text-white mb-3 mt-4">Seus Dados</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <input type="text" id="client-name" placeholder="Seu Nome Completo" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                <input type="tel" id="client-phone" placeholder="Seu Telefone (Whatsapp)" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                <input type="email" id="client-email" placeholder="Seu Email (Opcional)" class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                            </div>
+                        </div>
+    
+                        <!-- Botão de Agendar -->
+                        <button type="submit" id="submit-button" class="w-full mt-8 py-3 px-4 border border-transparent rounded-lg shadow-md text-base font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all duration-200 transform hover:scale-[1.01]">
+                            Confirmar Agendamento
+                        </button>
+                    </form>
+                </div>
 
                     <!-- Passo 2: Data e Hora -->
                     <div>
@@ -1688,6 +1722,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
