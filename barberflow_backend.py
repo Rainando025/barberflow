@@ -222,10 +222,10 @@ def manage_appointments():
                     return jsonify({'message': 'Acesso negado. Apenas Barbeiros (Admin) podem ver agendamentos.'}), 403
                 
                 # RETORNA APENAS AGENDAMENTOS NÃO ARQUIVADOS (is_archived = FALSE)
-                cur.execute("SELECT id, barber_id, service_name, appointment_date, appointment_time, client_name, service_price, status FROM appointments WHERE is_archived = FALSE ORDER BY appointment_date, appointment_time;")
+                cur.execute("SELECT id, barber_id, service_name, appointment_date, appointment_time, client_name, service_price, status FROM appointments WHERE is_archived = FALSE ORDER BY appointment_date, appointment_time ASC;")
                 appointments = cur.fetchall()
                 for appt in appointments:
-                    appt['appointment_date'] = appt['appointment_date'].strftime('%Y-%m-%d')
+                    appt['appointment_date'] = appt['appointment_date'].strftime('%d-%m-%Y')
                 return jsonify(appointments)
 
             elif request.method == 'POST':
@@ -557,30 +557,54 @@ HTML_TEMPLATE = f"""
     <main class="py-10">
         <div id="app-container" class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
             
-            <!-- 0. TELA DE LOGIN -->
-            <div id="login-view" class="flex justify-center items-center h-[60vh]">
-                <div class="bg-white p-8 rounded-xl shadow-2xl border-t-4 border-red-600 w-full max-w-md">
-                    <h2 class="text-3xl font-bold text-gray-900 mb-6 text-center">Acesso BarberFlow</h2>
-                    <p class="text-sm text-gray-500 mb-6 text-center">Escolha sua forma de acesso para continuar.</p>
-                    
-                    <button onclick="handleRoleSelection('client')" class="w-full mb-4 py-3 px-4 rounded-lg shadow-md text-base font-medium text-white bg-green-600 hover:bg-green-700 transition-all duration-200 transform hover:scale-[1.01]">
-                        Agendar um Serviço (Cliente)
-                    </button>
-                    
-                    <div class="relative flex py-5 items-center">
-                        <div class="flex-grow border-t border-gray-300"></div>
-                        <span class="flex-shrink mx-4 text-gray-400 text-sm">OU</span>
-                        <div class="flex-grow border-t border-gray-300"></div>
-                    </div>
-
-                    <form onsubmit="handleAdminLogin(event)" class="space-y-4">
-                        <input type="password" id="admin-key" placeholder="Chave de Acesso do Barbeiro" required class="w-full py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
-                        <button type="submit" class="w-full py-3 px-4 rounded-lg shadow-md text-base font-medium text-white bg-gray-800 hover:bg-gray-900 transition-all duration-200 transform hover:scale-[1.01]">
-                            Entrar como Barbeiro (Admin)
-                        </button>
-                        <p id="login-message" class="text-center text-sm text-red-500 font-semibold mt-2"></p>
-                    </form>
+            <!-- 0. TELA DE LOGIN (tema barbearia) -->
+            <div id="login-view" class="flex justify-center items-center h-[100vh]" style="background: linear-gradient(180deg, #000000 0%, #1a1a1a 100%);">
+              <div class="w-full max-w-md p-8 rounded-2xl shadow-2xl border-2 border-yellow-500 bg-gradient-to-b from-gray-900 to-black">
+                
+                <!-- LOGO / TÍTULO -->
+                <div class="flex flex-col items-center space-y-4 mb-6">
+                  <!-- LOGO opcional -->
+                  <div class="bg-black border-2 border-yellow-500 rounded-full p-2">
+                    <img src="/static/logo.png" alt="Logo BarberFlow" onerror="this.style.display='none'"
+                         class="w-24 h-24 rounded-full object-cover shadow-lg">
+                  </div>
+                  <h2 class="text-3xl font-extrabold text-yellow-400 tracking-wide text-center">
+                    Barber<span class="text-white">Flow</span>
+                  </h2>
+                  <p class="text-sm text-gray-300 text-center">Escolha sua forma de acesso para continuar</p>
                 </div>
+    
+                <!-- BOTÃO CLIENTE -->
+                <button onclick="handleRoleSelection('client')" 
+                  class="w-full mb-4 py-3 px-4 rounded-lg shadow-md text-base font-semibold bg-yellow-500 text-black hover:bg-yellow-400 transition-all duration-200 transform hover:scale-[1.03]">
+                  💈 Agendar um Serviço (Cliente)
+                </button>
+    
+                <!-- DIVISOR -->
+                <div class="relative flex py-5 items-center">
+                  <div class="flex-grow border-t border-gray-700"></div>
+                  <span class="flex-shrink mx-4 text-gray-400 text-sm">OU</span>
+                  <div class="flex-grow border-t border-gray-700"></div>
+                </div>
+    
+                <!-- FORM ADMIN -->
+                <form onsubmit="handleAdminLogin(event)" class="space-y-4">
+                  <input type="password" id="admin-key" placeholder="Chave de Acesso do Barbeiro" required 
+                         class="w-full py-3 px-4 border border-gray-700 rounded-lg shadow-sm bg-transparent text-white placeholder-gray-400 focus:ring-yellow-500 focus:border-yellow-500 focus:outline-none">
+                  
+                  <button type="submit" 
+                    class="w-full py-3 px-4 rounded-lg shadow-md text-base font-semibold text-white bg-gray-900 border border-yellow-500 hover:bg-black transition-all duration-200 transform hover:scale-[1.03]">
+                    🔑 Entrar como Barbeiro (Admin)
+                  </button>
+    
+                  <p id="login-message" class="text-center text-sm text-red-400 font-semibold mt-2"></p>
+                </form>
+    
+                <!-- RODAPÉ -->
+                <p class="mt-8 text-center text-xs text-gray-400">
+                  Autêntica Barbershop © 2025 — <span class="text-yellow-500">Autencidade em cada corte</span>
+                </p>
+              </div>
             </div>
 
             <!-- 1. VISTA DO CLIENTE (AGENDAMENTO) -->
@@ -1658,3 +1682,4 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
