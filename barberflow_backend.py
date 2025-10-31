@@ -521,12 +521,7 @@ HTML_TEMPLATE = f"""
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
         body {{
             font-family: 'Inter', sans-serif;
-            background-image: url('https://raw.githubusercontent.com/Rainando025/barberflow/refs/heads/main/barbearia5.jpg');
-            background-size: cover;
-            background-position: center;
-            background-repeat: no-repeat;
-            background-attachment: fixed;
-            color: #eee;
+            background-color: #f3f4f6;
         }}
         #loading-overlay {{
             z-index: 50;
@@ -1687,6 +1682,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
