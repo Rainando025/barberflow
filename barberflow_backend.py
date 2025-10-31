@@ -664,49 +664,12 @@ HTML_TEMPLATE = f"""
                         </div>
     
                         <!-- Botão de Agendar -->
-                        <button type="submit" id="submit-button" class="w-full mt-8 py-3 px-4 border border-transparent rounded-lg shadow-md text-base font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all duration-200 transform hover:scale-[1.01]">
+                        <button type="submit" id="submit-button" class="w-full mt-8 py-3 px-4 border border-transparent rounded-lg shadow-md text-base font-medium text-white bg-brown-600 hover:bg-brown-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all duration-200 transform hover:scale-[1.01]">
                             Confirmar Agendamento
                         </button>
                     </form>
                 </div>
 
-                    <!-- Passo 2: Data e Hora -->
-                    <div>
-                        <h3 class="text-lg font-semibold text-gray-800 mb-3 mt-4">Data e Hora</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div>
-                                <label for="date" class="block text-sm font-medium text-gray-700">Data Desejada</label>
-                                <input type="date" id="date" required class="mt-1 block w-full py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
-                            </div>
-                            <div>
-                                <label for="time" class="block text-sm font-medium text-gray-700">Horários Disponíveis</label>
-                                <select id="time" required class="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500 sm:text-sm">
-                                    <option value="">-- Selecione o Horário --</option>
-                                    <option value="09:00">09:00</option>
-                                    <option value="10:30">10:30</option>
-                                    <option value="14:00">14:00</option>
-                                    <option value="15:30">15:30</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Passo 3: Dados do Cliente -->
-                    <div>
-                        <h3 class="text-lg font-semibold text-gray-800 mb-3 mt-4">Seus Dados</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <input type="text" id="client-name" placeholder="Seu Nome Completo" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
-                            <input type="tel" id="client-phone" placeholder="Seu Telefone (Whatsapp)" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
-                            <input type="email" id="client-email" placeholder="Seu Email (Opcional)" class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
-                        </div>
-                    </div>
-
-                    <!-- Botão de Agendar -->
-                    <button type="submit" id="submit-button" class="w-full mt-8 py-3 px-4 border border-transparent rounded-lg shadow-md text-base font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all duration-200 transform hover:scale-[1.01]">
-                        Confirmar Agendamento
-                    </button>
-                </form>
-            </div>
 
             <!-- 2. VISTA DO BARBEIRO (ADMIN) -->
             <div id="admin-view" class="hidden bg-white p-6 md:p-10 rounded-xl shadow-2xl border-t-4 border-red-600">
@@ -1722,6 +1685,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
