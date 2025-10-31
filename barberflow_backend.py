@@ -522,7 +522,7 @@ HTML_TEMPLATE = f"""
         body {{
             font-family: 'Inter', sans-serif;
             background-color: #f3f4f6;
-            background: url('{{{{ url_for('https://raw.githubusercontent.com/Rainando025/barberflow/refs/heads/main/barbearia5.jpg') }}}}') no-repeat center center / cover;
+            <img src="https://raw.githubusercontent.com/Rainando025/barberflow/refs/heads/main/barbearia5.jpg"
         }}
         #loading-overlay {{
             z-index: 50;
@@ -1683,6 +1683,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
