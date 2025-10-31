@@ -684,16 +684,16 @@ HTML_TEMPLATE = f"""
                         <button onclick="changeAdminTab('appointments')" id="tab-appointments" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-red-500 text-red-600">
                             Agendamentos Ativos
                         </button>
-                        <button onclick="changeAdminTab('archived')" id="tab-archived" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white-700">
+                        <button onclick="changeAdminTab('archived')" id="tab-archived" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white">
                             Agendamentos Arquivados
                         </button>
-                        <button onclick="changeAdminTab('services')" id="tab-services" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white-700">
+                        <button onclick="changeAdminTab('services')" id="tab-services" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white">
                             Serviços e Preços
                         </button>
-                        <button onclick="changeAdminTab('expenses')" id="tab-expenses" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white-700">
+                        <button onclick="changeAdminTab('expenses')" id="tab-expenses" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white">
                             Despesas
                         </button>
-                        <button onclick="changeAdminTab('dashboard')" id="tab-dashboard" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white-700">
+                        <button onclick="changeAdminTab('dashboard')" id="tab-dashboard" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white">
                             Dashboard e Caixa
                         </button>
                     </nav>
@@ -704,8 +704,8 @@ HTML_TEMPLATE = f"""
                     
                     <!-- 2.1. Agendamentos Ativos (NÃO ARQUIVADOS) -->
                     <div id="appointments-tab" class="tab-content">
-                        <h3 class="text-xl font-semibold text-gray-800 mb-4">Próximos Agendamentos (Ativos)</h3>
-                        <p class="text-sm text-gray-500 mb-4">Apenas agendamentos Ativos (não arquivados) são exibidos aqui. Arquive os agendamentos antigos/finalizados.</p>
+                        <h3 class="text-xl font-semibold text-white mb-4">Próximos Agendamentos (Ativos)</h3>
+                        <p class="text-sm text-orange-500 mb-4">Apenas agendamentos Ativos (não arquivados) são exibidos aqui. Arquive os agendamentos antigos/finalizados.</p>
                         <div class="bg-gray-50 p-4 rounded-lg shadow-inner">
                             <p class="text-sm text-gray-600 mb-4">Atualize o status para calcular o Fluxo de Caixa.</p>
                             <div id="appointments-list" class="space-y-4">
@@ -716,8 +716,8 @@ HTML_TEMPLATE = f"""
 
                     <!-- 2.1.b. Agendamentos Arquivados (NOVA TAB) -->
                     <div id="archived-tab" class="tab-content hidden">
-                        <h3 class="text-xl font-semibold text-gray-800 mb-4">Agendamentos Arquivados</h3>
-                        <p class="text-sm text-gray-500 mb-4">Histórico de agendamentos arquivados. Eles não afetam o dashboard principal, mas podem ser desarquivados.</p>
+                        <h3 class="text-xl font-semibold text-white mb-4">Agendamentos Arquivados</h3>
+                        <p class="text-sm text-orange-500 mb-4">Histórico de agendamentos arquivados. Eles não afetam o dashboard principal, mas podem ser desarquivados.</p>
                         <div class="bg-gray-50 p-4 rounded-lg shadow-inner">
                             <div id="archived-appointments-list" class="space-y-4">
                                 <p class="text-center text-gray-500">Carregando agendamentos arquivados...</p>
@@ -727,7 +727,7 @@ HTML_TEMPLATE = f"""
 
                     <!-- 2.2. Gerenciamento de Serviços e Preços (Mantida) -->
                     <div id="services-tab" class="tab-content hidden">
-                        <h3 class="text-xl font-semibold text-gray-800 mb-4">Gerenciar Serviços</h3>
+                        <h3 class="text-xl font-semibold text-white mb-4">Gerenciar Serviços</h3>
                         
                         <!-- Formulário de Edição/Adição de Serviço -->
                         <form id="service-form" onsubmit="handleServiceSubmit(event)" class="bg-gray-50 p-6 rounded-lg shadow mb-6 space-y-4">
@@ -738,7 +738,7 @@ HTML_TEMPLATE = f"""
                                 <input type="number" id="service-price" placeholder="Preço (R$)" required min="0" step="0.01" class="py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                                 <input type="number" id="service-duration" placeholder="Duração (minutos)" required min="10" class="py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                             </div>
-                            <button type="submit" class="w-full py-2 px-4 rounded-lg text-white bg-red-600 hover:bg-red-700 transition-colors duration-200">
+                            <button type="submit" class="w-full py-2 px-4 rounded-lg text-white bg-orange-600 hover:bg-orange-700 transition-colors duration-200">
                                 <span id="service-button-text">Salvar Novo Serviço</span>
                             </button>
                             <button type="button" onclick="clearServiceForm()" id="cancel-service-button" class="w-full py-2 px-4 rounded-lg text-gray-700 bg-gray-200 hover:bg-gray-300 transition-colors duration-200 hidden">
@@ -748,13 +748,13 @@ HTML_TEMPLATE = f"""
 
                         <!-- Lista de Serviços Atuais -->
                         <ul id="current-services-list" class="space-y-2">
-                            <li class="text-center text-gray-500 p-4">Carregando lista de serviços...</li>
+                            <li class="text-center text-black p-4">Carregando lista de serviços...</li>
                         </ul>
                     </div>
 
                     <!-- 2.3. Gerenciamento de Despesas (Mantida) -->
                     <div id="expenses-tab" class="tab-content hidden">
-                        <h3 class="text-xl font-semibold text-gray-800 mb-4">Gerenciar Despesas do Mês</h3>
+                        <h3 class="text-xl font-semibold text-white mb-4">Gerenciar Despesas do Mês</h3>
                         
                         <!-- Formulário de Adição de Despesa -->
                         <form id="expense-form" onsubmit="handleExpenseSubmit(event)" class="bg-gray-50 p-6 rounded-lg shadow mb-6 space-y-4">
@@ -790,7 +790,7 @@ HTML_TEMPLATE = f"""
 
                     <!-- 2.4. Dashboard e Fluxo de Caixa (Mantida) -->
                     <div id="dashboard-tab" class="tab-content hidden">
-                        <h3 class="text-xl font-semibold text-gray-800 mb-4">Dashboard Financeiro (Mês Atual)</h3>
+                        <h3 class="text-xl font-semibold text-white mb-4">Dashboard Financeiro (Mês Atual)</h3>
                         
                         <div class="grid grid-cols-1 sm:grid-cols-4 gap-6">
                             
@@ -1685,6 +1685,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
