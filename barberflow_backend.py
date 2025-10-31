@@ -558,7 +558,7 @@ HTML_TEMPLATE = f"""
         <div id="app-container" class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
             
             <!-- 0. TELA DE LOGIN (tema barbearia) -->
-            <div id="login-view" class="flex justify-center items-center h-[100vh]" style="background: linear-gradient(180deg, #000000 0%, #1a1a1a 100%);">
+            <div id="login-view" class="flex justify-center items-center h-[100vh]">
               <div class="w-full max-w-md p-8 rounded-2xl shadow-2xl border-2 border-yellow-500 bg-gradient-to-b from-gray-900 to-black">
                 
                 <!-- LOGO / TÍTULO -->
@@ -1682,5 +1682,6 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
