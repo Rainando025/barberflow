@@ -630,7 +630,7 @@ HTML_TEMPLATE = f"""
                             </div>
                             <div>
                                 <label for="service" class="block text-sm font-medium text-yellow-500">Escolha o Corte/Serviço</label>
-                                <select id="service" required class="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
+                                <select id="service" required class="mt-1 block w-full pl-3 pr-10 py-3 text-black border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
                                     <option value="">-- Carregando Serviços... --</option>
                                 </select>
                             </div>
@@ -646,7 +646,7 @@ HTML_TEMPLATE = f"""
                                 </div>
                                 <div>
                                     <label for="time" class="block text-sm font-medium text-yellow-500">Horários Disponíveis</label>
-                                    <select id="time" required class="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500 sm:text-sm">
+                                    <select id="time" required class="mt-1 block w-full pl-3 pr-10 py-3 text-black border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500 sm:text-sm">
                                         <option value="">-- Selecione um Barbeiro e Data --</option>
                                     </select>
                                 </div>
@@ -664,7 +664,7 @@ HTML_TEMPLATE = f"""
                         </div>
     
                         <!-- Botão de Agendar -->
-                        <button type="submit" id="submit-button" class="w-full mt-8 py-3 px-4 border border-transparent rounded-lg shadow-md text-base font-medium text-white bg-brown-600 hover:bg-brown-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all duration-200 transform hover:scale-[1.01]">
+                        <button type="submit" id="submit-button" class="w-full mt-8 py-3 px-4 border border-transparent rounded-lg shadow-md text-base font-medium text-white bg-orange-600 hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all duration-200 transform hover:scale-[1.01]">
                             Confirmar Agendamento
                         </button>
                     </form>
@@ -1685,6 +1685,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
