@@ -544,7 +544,7 @@ HTML_TEMPLATE = f"""
     <!-- Navbar simples (visível após o login/seleção de função) -->
     <header id="app-header" class="bg-gray-900 shadow-md hidden">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
-            <h1 class="text-3xl font-extrabold text-white tracking-tight">Barber<span class="text-red-500">Flow</span></h1>
+            <h1 class="text-3xl font-extrabold text-white tracking-tight">Autêntica<span class="text-red-500">Barbershop</span></h1>
             
             <!-- Seletor de Modo (Switch de Agendamento para Admin) -->
             <div id="view-switch-container" class="flex items-center space-x-4">
@@ -673,8 +673,8 @@ HTML_TEMPLATE = f"""
 
             <!-- 2. VISTA DO BARBEIRO (ADMIN) -->
             <div id="admin-view" class="hidden bg-black p-6 md:p-10 rounded-xl shadow-2xl border-t-4 border-red-600">
-                <h2 class="text-3xl font-bold text-yellow-800 mb-6">Painel do Barbeiro</h2>
-                <p id="admin-role-warning" class="bg-red-100 border-l-4 border-red-500 text-orange-700 p-3 mb-4 hidden" role="alert">
+                <h2 class="text-3xl font-bold text-yellow-700 mb-6">Painel do Barbeiro</h2>
+                <p id="admin-role-warning" class="bg-red-100 border-l-4 border-red-500 text-orange-600 p-3 mb-4 hidden" role="alert">
                     <span class="font-bold">Atenção:</span> Você não possui permissão de Barbeiro (Admin) para acessar esta aba.
                 </p>
 
@@ -1685,6 +1685,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
