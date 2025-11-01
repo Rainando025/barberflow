@@ -624,8 +624,8 @@ HTML_TEMPLATE = f"""
                                 <label for="barber" class="block text-sm font-medium text-yellow-500">Escolha o Barbeiro</label>
                                 <select id="barber" required class="mt-1 block w-full pl-3 pr-10 py-3 text-black border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
                                     <option value="">-- Selecione o Profissional --</option>
-                                    <option value="barber1">João (Especialista em Fade)</option>
-                                    <option value="barber2">Pedro (Especialista em Clássico)</option>
+                                    <option value="barber1">Franklin Barber</option>
+                                    <option value="barber2"> </option>
                                 </select>
                             </div>
                             <div>
@@ -1143,7 +1143,7 @@ HTML_TEMPLATE = f"""
                     case 'Agendado': default: statusClass = 'bg-yellow-100 text-yellow-800'; break;
                 }}
 
-                const barberName = appointment.barber_id === 'barber1' ? 'João' : (appointment.barber_id === 'barber2' ? 'Pedro' : appointment.barber_id);
+                const barberName = appointment.barber_id === 'barber1' ? 'Fanklin' : (appointment.barber_id === 'barber2' ? '' : appointment.barber_id);
                 const formattedPrice = parseFloat(appointment.service_price).toFixed(2).replace('.', ',');
                 
                 let actionButton = '';
@@ -1685,6 +1685,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
