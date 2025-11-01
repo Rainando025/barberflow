@@ -544,7 +544,7 @@ HTML_TEMPLATE = f"""
     <!-- Navbar simples (visível após o login/seleção de função) -->
     <header id="app-header" class="bg-gray-900 shadow-md hidden">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
-            <h1 class="text-3xl font-extrabold text-white tracking-tight">Autêntica<span class="text-red-500">Barbershop</span></h1>
+            <h1 class="text-3xl font-extrabold text-white tracking-tight">Barber<span class="text-red-500">Flow</span></h1>
             
             <!-- Seletor de Modo (Switch de Agendamento para Admin) -->
             <div id="view-switch-container" class="flex items-center space-x-4">
@@ -575,7 +575,7 @@ HTML_TEMPLATE = f"""
                          class="w-24 h-24 rounded-full object-cover shadow-lg">
                   </div>
                   <h2 class="text-3xl font-extrabold text-yellow-400 tracking-wide text-center">
-                    Barber<span class="text-white">Flow</span>
+                    Autêntica<span class="text-white">Barbershop</span>
                   </h2>
                   <p class="text-sm text-gray-300 text-center">Escolha sua forma de acesso para continuar</p>
                 </div>
@@ -1685,6 +1685,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
