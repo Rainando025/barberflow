@@ -3,8 +3,7 @@ import os
 import psycopg2
 import psycopg2.extras 
 from flask import Flask, request, jsonify, render_template_string, session, redirect, url_for
-from datetime import datetime, date, timedelta
-import calendar
+from datetime import datetime, date
 
 # --- 1. CONFIGURAÇÃO E CONEXÃO COM POSTGRESQL ---
 # ATENÇÃO: Substitua estas variáveis pelas suas credenciais reais do PostgreSQL.
@@ -19,16 +18,7 @@ DB_CONFIG = {
 # Chave secreta para sessões do Flask. MUDE ESTA CHAVE em produção!
 FLASK_SECRET_KEY = 'e205e9ea1d4aaf49f7b810ef5666d7aaffad3a9f1c66dbe4763e03faffef7b90'
 ADMIN_KEY = 'barberflowadmin'
-FIXED_EXPENSES = 1500.00 # Exemplo de despesa fixa mensal
-
-# --- Configurações de Horário para Agendamento ---
-# Horários de funcionamento (usados para calcular slots disponíveis)
-SHOP_HOURS = [
-    ("09:00", "12:00"), # Manhã
-    ("14:00", "18:00")  # Tarde
-]
-# Intervalo base para checagem de slots (todos os slots de agendamento devem ser múltiplos deste)
-SLOT_INTERVAL_MINUTES = 15 
+FIXED_EXPENSES = 1500.00
 
 def get_db_connection():
     """Cria e retorna uma conexão com o banco de dados."""
@@ -36,1644 +26,11 @@ def get_db_connection():
         conn = psycopg2.connect(**DB_CONFIG)
         return conn
     except Exception as e:
-        print(f"Erro ao conectar ao banco de dados: {e}")
+        print(f"Erro ao conectar ao PostgreSQL: {e}")
         return None
 
-app = Flask(__name__)
-app.secret_key = FLASK_SECRET_KEY
-
-
-# --- 2. FUNÇÕES DE BANCO DE DADOS (DB UTILS) ---
-
-def execute_query(query, params=None, fetch=False):
-    """Executa uma query no DB."""
-    conn = get_db_connection()
-    if conn is None:
-        return None
-
-    try:
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute(query, params)
-            if fetch:
-                if cur.rowcount > 0:
-                    return cur.fetchall()
-                return []
-            conn.commit()
-            return True
-    except Exception as e:
-        print(f"Erro na execução da query: {e}")
-        conn.rollback()
-        return None
-    finally:
-        conn.close()
-
-def get_services():
-    """Busca todos os serviços disponíveis."""
-    query = "SELECT id, name, price, duration_minutes FROM services ORDER BY name"
-    return execute_query(query, fetch=True)
-
-def get_appointments(date_str, include_archived=False):
-    """Busca agendamentos para uma data específica. Opcionalmente inclui arquivados."""
-    if include_archived:
-        query = """
-            SELECT a.id, a.client_name, a.client_phone, a.appointment_datetime, a.status, s.name as service_name, a.archived
-            FROM appointments a
-            JOIN services s ON a.service_id = s.id
-            WHERE DATE(a.appointment_datetime) = %s
-            ORDER BY a.appointment_datetime
-        """
-    else:
-        query = """
-            SELECT a.id, a.client_name, a.client_phone, a.appointment_datetime, a.status, s.name as service_name, a.archived
-            FROM appointments a
-            JOIN services s ON a.service_id = s.id
-            WHERE DATE(a.appointment_datetime) = %s AND a.archived = FALSE
-            ORDER BY a.appointment_datetime
-        """
-    return execute_query(query, (date_str,), fetch=True)
-
-def get_expenses(month, year):
-    """Busca despesas para um mês/ano específico."""
-    query = "SELECT id, description, amount, expense_date FROM expenses WHERE EXTRACT(MONTH FROM expense_date) = %s AND EXTRACT(YEAR FROM expense_date) = %s ORDER BY expense_date DESC"
-    return execute_query(query, (month, year), fetch=True)
-
-def calculate_monthly_summary(month, year):
-    """Calcula o resumo financeiro do mês."""
-    
-    # 1. Total de Receita (apenas agendamentos concluídos, não arquivados)
-    revenue_query = """
-        SELECT SUM(s.price) 
-        FROM appointments a
-        JOIN services s ON a.service_id = s.id
-        WHERE EXTRACT(MONTH FROM a.appointment_datetime) = %s 
-          AND EXTRACT(YEAR FROM a.appointment_datetime) = %s
-          AND a.status = 'Concluído'
-          AND a.archived = FALSE
-    """
-    revenue_result = execute_query(revenue_query, (month, year), fetch=True)
-    total_revenue = float(revenue_result[0][0]) if revenue_result and revenue_result[0][0] else 0.0
-
-    # 2. Total de Despesas (variáveis)
-    expenses_result = get_expenses(month, year)
-    total_variable_expense = sum(float(e['amount']) for e in expenses_result)
-
-    # 3. Total de Despesas (fixas + variáveis)
-    total_expense = FIXED_EXPENSES + total_variable_expense
-
-    # 4. Lucro Líquido
-    net_profit = total_revenue - total_expense
-
-    return {
-        'total_revenue': total_revenue,
-        'total_expense': total_expense,
-        'total_variable_expense': total_variable_expense,
-        'fixed_expense': FIXED_EXPENSES,
-        'net_profit': net_profit
-    }
-
-def get_appointment_slots(day):
-    """Calcula os slots disponíveis para um dia específico."""
-    
-    # Busca agendamentos ocupados no dia (ativos e confirmados)
-    occupied_slots_query = """
-        SELECT appointment_datetime, s.duration_minutes
-        FROM appointments a
-        JOIN services s ON a.service_id = s.id
-        WHERE DATE(a.appointment_datetime) = %s AND a.status IN ('Agendado', 'Confirmado') AND a.archived = FALSE
-    """
-    occupied_slots_data = execute_query(occupied_slots_query, (day.isoformat(),), fetch=True)
-    
-    occupied_ranges = []
-    if occupied_slots_data:
-        for slot in occupied_slots_data:
-            start_time = slot['appointment_datetime']
-            duration = slot['duration_minutes']
-            end_time = start_time + timedelta(minutes=duration)
-            occupied_ranges.append((start_time.time(), end_time.time()))
-
-    all_slots = []
-    
-    # Para cada bloco de horário de funcionamento (SHOP_HOURS)
-    for start_hour_str, end_hour_str in SHOP_HOURS:
-        start_time = datetime.strptime(start_hour_str, '%H:%M').time()
-        end_time = datetime.strptime(end_hour_str, '%H:%M').time()
-        
-        current_dt = datetime.combine(day, start_time)
-        end_dt = datetime.combine(day, end_time)
-
-        while current_dt < end_dt:
-            slot_start_time = current_dt.time()
-            slot_end_dt = current_dt + timedelta(minutes=SLOT_INTERVAL_MINUTES)
-            slot_end_time = slot_end_dt.time()
-            
-            # Checa se o slot está no passado (apenas para o dia de hoje)
-            is_past = (day == date.today() and slot_start_time <= datetime.now().time())
-
-            is_available = True
-            if not is_past:
-                # Checa conflito com slots ocupados
-                for occ_start, occ_end in occupied_ranges:
-                    # Um slot está ocupado se o INÍCIO dele estiver dentro de um range ocupado,
-                    # ou se o range ocupado se estende *sobre* o slot.
-                    # Simplificação: Checa se o horário de início do slot está dentro de qualquer ocupação.
-                    if occ_start <= slot_start_time < occ_end:
-                        is_available = False
-                        break
-
-            # Adiciona apenas se não for passado ou se for disponível (e não passado)
-            if not is_past and is_available:
-                all_slots.append(slot_start_time.strftime('%H:%M'))
-
-            current_dt = slot_end_dt
-
-    return all_slots
-
-# --- 3. ROTAS DE API (JSON) ---
-
-@app.route('/api/services', methods=['GET'])
-def api_get_services():
-    """API: Retorna a lista de serviços."""
-    services = get_services()
-    if services is not None:
-        # Converte para lista de dicts padrão para serialização JSON
-        return jsonify([dict(row) for row in services])
-    return jsonify({"error": "Erro ao buscar serviços"}), 500
-
-@app.route('/api/slots/<date_str>', methods=['GET'])
-def api_get_slots(date_str):
-    """API: Retorna os slots disponíveis para a data."""
-    try:
-        target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        if target_date < date.today():
-             return jsonify([]) # Não permite agendamento no passado
-        
-        slots = get_appointment_slots(target_date)
-        return jsonify(slots)
-    except ValueError:
-        return jsonify({"error": "Formato de data inválido. Use YYYY-MM-DD"}), 400
-
-@app.route('/api/appointments/<date_str>', methods=['GET'])
-def api_get_appointments(date_str):
-    """API: Retorna agendamentos para a data."""
-    is_admin = session.get('is_admin', False)
-    if not is_admin:
-        return jsonify({"error": "Não autorizado"}), 403
-
-    try:
-        # O admin pode ver os arquivados separadamente, mas por padrão na schedule (agenda) não mostramos.
-        include_archived = request.args.get('include_archived', 'false').lower() == 'true'
-        appointments = get_appointments(date_str, include_archived=include_archived)
-        
-        if appointments is not None:
-            formatted_appointments = []
-            for app in appointments:
-                # Converte para dict padrão e formata o datetime
-                formatted_app = dict(app)
-                formatted_app['appointment_time'] = formatted_app['appointment_datetime'].strftime('%H:%M')
-                formatted_app['appointment_date'] = formatted_app['appointment_datetime'].strftime('%Y-%m-%d')
-                del formatted_app['appointment_datetime']
-                formatted_appointments.append(formatted_app)
-            return jsonify(formatted_appointments)
-        return jsonify({"error": "Erro ao buscar agendamentos"}), 500
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/appointments', methods=['POST'])
-def api_schedule_appointment():
-    """API: Cria um novo agendamento."""
-    data = request.json
-    client_name = data.get('client_name')
-    client_phone = data.get('client_phone')
-    service_id = data.get('service_id')
-    appointment_date = data.get('date')
-    appointment_time = data.get('time')
-    
-    if not all([client_name, client_phone, service_id, appointment_date, appointment_time]):
-        return jsonify({"error": "Dados incompletos"}), 400
-
-    try:
-        # Concatena data e hora para formar um datetime
-        dt_str = f"{appointment_date} {appointment_time}"
-        appointment_dt = datetime.strptime(dt_str, '%Y-%m-%d %H:%M')
-        
-        # Garante que não está agendando no passado
-        if appointment_dt < datetime.now().replace(second=0, microsecond=0):
-            return jsonify({"error": "Não é possível agendar no passado"}), 400
-
-        # Checa a disponibilidade do slot
-        available_slots = get_appointment_slots(appointment_dt.date())
-        if appointment_time not in available_slots:
-            return jsonify({"error": "Horário indisponível. Por favor, selecione outro."}), 409 # Conflict
-
-        query = "INSERT INTO appointments (client_name, client_phone, service_id, appointment_datetime, status) VALUES (%s, %s, %s, %s, 'Agendado') RETURNING id"
-        result = execute_query(query, (client_name, client_phone, service_id, appointment_dt))
-
-        if result:
-            return jsonify({"message": "Agendamento criado com sucesso!"}), 201
-        return jsonify({"error": "Erro ao salvar agendamento"}), 500
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/appointments/<int:app_id>/status', methods=['PUT'])
-def api_update_appointment_status(app_id):
-    """API: Atualiza o status de um agendamento."""
-    if not session.get('is_admin'):
-        return jsonify({"error": "Não autorizado"}), 403
-    
-    data = request.json
-    new_status = data.get('status')
-    
-    if new_status not in ['Agendado', 'Confirmado', 'Cancelado', 'Concluído']:
-        return jsonify({"error": "Status inválido"}), 400
-
-    query = "UPDATE appointments SET status = %s WHERE id = %s"
-    if execute_query(query, (new_status, app_id)):
-        return jsonify({"message": "Status atualizado com sucesso"}), 200
-    return jsonify({"error": "Erro ao atualizar status"}), 500
-
-@app.route('/api/appointments/<int:app_id>/archive', methods=['PUT'])
-def api_archive_appointment(app_id):
-    """API: Arquiva um agendamento."""
-    if not session.get('is_admin'):
-        return jsonify({"error": "Não autorizado"}), 403
-
-    query = "UPDATE appointments SET archived = TRUE WHERE id = %s"
-    if execute_query(query, (app_id,)):
-        return jsonify({"message": "Agendamento arquivado com sucesso"}), 200
-    return jsonify({"error": "Erro ao arquivar agendamento"}), 500
-
-@app.route('/api/admin/services', methods=['POST', 'PUT'])
-def api_manage_service():
-    """API: Adiciona ou atualiza um serviço."""
-    if not session.get('is_admin'):
-        return jsonify({"error": "Não autorizado"}), 403
-
-    data = request.json
-    name = data.get('name')
-    price = data.get('price')
-    duration_minutes = data.get('duration_minutes')
-    service_id = data.get('id')
-
-    if not all([name, price, duration_minutes]):
-        return jsonify({"error": "Dados de serviço incompletos"}), 400
-
-    try:
-        if request.method == 'POST':
-            query = "INSERT INTO services (name, price, duration_minutes) VALUES (%s, %s, %s)"
-            if execute_query(query, (name, price, duration_minutes)):
-                return jsonify({"message": "Serviço adicionado com sucesso"}), 201
-        elif request.method == 'PUT' and service_id:
-            query = "UPDATE services SET name = %s, price = %s, duration_minutes = %s WHERE id = %s"
-            if execute_query(query, (name, price, duration_minutes, service_id)):
-                return jsonify({"message": "Serviço atualizado com sucesso"}), 200
-        
-        return jsonify({"error": "Erro ao gerenciar serviço"}), 500
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/admin/services/<int:service_id>', methods=['DELETE'])
-def api_delete_service(service_id):
-    """API: Deleta um serviço."""
-    if not session.get('is_admin'):
-        return jsonify({"error": "Não autorizado"}), 403
-    
-    # Prevenção: não deletar serviços que possuem agendamentos
-    check_query = "SELECT COUNT(*) FROM appointments WHERE service_id = %s AND archived = FALSE"
-    count_result = execute_query(check_query, (service_id,), fetch=True)
-    if count_result and count_result[0][0] > 0:
-        return jsonify({"error": "Não é possível deletar. Existem agendamentos ativos vinculados a este serviço."}), 409 # Conflict
-
-    query = "DELETE FROM services WHERE id = %s"
-    if execute_query(query, (service_id,)):
-        return jsonify({"message": "Serviço deletado com sucesso"}), 200
-    return jsonify({"error": "Erro ao deletar serviço"}), 500
-
-@app.route('/api/admin/expenses', methods=['POST'])
-def api_add_expense():
-    """API: Adiciona uma despesa variável."""
-    if not session.get('is_admin'):
-        return jsonify({"error": "Não autorizado"}), 403
-    
-    data = request.json
-    description = data.get('description')
-    amount = data.get('amount')
-    expense_date_str = data.get('expense_date')
-
-    if not all([description, amount, expense_date_str]):
-        return jsonify({"error": "Dados de despesa incompletos"}), 400
-    
-    try:
-        amount = float(amount)
-        expense_date = datetime.strptime(expense_date_str, '%Y-%m-%d').date()
-        query = "INSERT INTO expenses (description, amount, expense_date) VALUES (%s, %s, %s)"
-        if execute_query(query, (description, amount, expense_date)):
-            return jsonify({"message": "Despesa adicionada com sucesso"}), 201
-        return jsonify({"error": "Erro ao adicionar despesa"}), 500
-    except ValueError:
-        return jsonify({"error": "Valor ou data inválida"}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/admin/expenses/<int:expense_id>', methods=['DELETE'])
-def api_delete_expense(expense_id):
-    """API: Deleta uma despesa."""
-    if not session.get('is_admin'):
-        return jsonify({"error": "Não autorizado"}), 403
-
-    query = "DELETE FROM expenses WHERE id = %s"
-    if execute_query(query, (expense_id,)):
-        return jsonify({"message": "Despesa deletada com sucesso"}), 200
-    return jsonify({"error": "Erro ao deletar despesa"}), 500
-
-@app.route('/api/admin/summary/<int:month>/<int:year>', methods=['GET'])
-def api_get_summary(month, year):
-    """API: Retorna o resumo financeiro mensal."""
-    if not session.get('is_admin'):
-        return jsonify({"error": "Não autorizado"}), 403
-
-    if not 1 <= month <= 12 or not 2000 <= year <= 2100:
-        return jsonify({"error": "Mês ou ano inválido"}), 400
-
-    summary = calculate_monthly_summary(month, year)
-    return jsonify(summary)
-
-@app.route('/api/admin/expenses/<int:month>/<int:year>', methods=['GET'])
-def api_get_expenses(month, year):
-    """API: Retorna a lista de despesas variáveis para um mês/ano."""
-    if not session.get('is_admin'):
-        return jsonify({"error": "Não autorizado"}), 403
-        
-    expenses = get_expenses(month, year)
-    if expenses is not None:
-        formatted_expenses = []
-        for exp in expenses:
-            formatted_exp = dict(exp)
-            # Formata a data para YYYY-MM-DD
-            formatted_exp['expense_date'] = formatted_exp['expense_date'].strftime('%Y-%m-%d')
-            formatted_expenses.append(formatted_exp)
-        return jsonify(formatted_expenses)
-    return jsonify({"error": "Erro ao buscar despesas"}), 500
-
-# --- 4. ROTAS DE AUTENTICAÇÃO E SESSÃO ---
-
-@app.route('/admin/login', methods=['POST'])
-def admin_login():
-    """Autenticação de admin."""
-    data = request.json
-    password = data.get('password')
-    if password == ADMIN_KEY:
-        session['is_admin'] = True
-        return jsonify({"message": "Login de admin bem-sucedido"}), 200
-    return jsonify({"error": "Senha incorreta"}), 401
-
-@app.route('/logout', methods=['POST'])
-def logout():
-    """Logout de admin."""
-    session.pop('is_admin', None)
-    return jsonify({"message": "Logout realizado"}), 200
-
-@app.route('/check_auth', methods=['GET'])
-def check_auth():
-    """Checa o status de autenticação."""
-    return jsonify({"is_admin": session.get('is_admin', False)})
-
-# --- 5. ROTA PRINCIPAL (INDEX) ---
-
-@app.route('/')
-def index():
-    """Renderiza a página HTML principal."""
-    # Definição inicial da estrutura do banco de dados (CREATE TABLE IF NOT EXISTS)
-    # Isto garante que o DB esteja pronto na primeira execução.
-    setup_db_schema()
-
-    html_content = f"""
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BarberFlow - Agendamento e Gestão</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
-        body {{ font-family: 'Inter', sans-serif; background-color: #1a1a2e; color: #ffffff; }}
-        .header-gradient {{ background: linear-gradient(90deg, #ff7e5f 0%, #feb47b 100%); }}
-        .btn-primary {{ background-color: #ff7e5f; color: #1a1a2e; font-weight: 600; transition: all 0.3s; }}
-        .btn-primary:hover {{ background-color: #feb47b; }}
-        .btn-secondary {{ background-color: #3b3b54; color: #ffffff; transition: all 0.3s; }}
-        .btn-secondary:hover {{ background-color: #4f4f6b; }}
-        .card {{ background-color: #2a2a4a; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1); }}
-        .input-style {{ background-color: #3b3b54; border: 1px solid #4f4f6b; color: #ffffff; padding: 0.75rem; border-radius: 0.5rem; width: 100%; }}
-        .tab-active {{ border-bottom: 3px solid #ff7e5f; color: #ff7e5f; }}
-        .loading-overlay {{ position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.7); display: flex; justify-content: center; align-items: center; z-index: 50; }}
-        .spinner {{ border: 4px solid rgba(255, 255, 255, 0.1); border-top-color: #ff7e5f; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }}
-        @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
-        /* Estilos para a rolagem horizontal nos tabs (responsividade) */
-        .tab-scroll-container {{ overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }}
-        .tab-scroll-container::-webkit-scrollbar {{ display: none; }}
-        .tab-scroll-container {{ -ms-overflow-style: none; scrollbar-width: none; }}
-    </style>
-</head>
-<body class="min-h-screen">
-    <div id="loading-overlay" class="loading-overlay hidden">
-        <div class="spinner"></div>
-    </div>
-
-    <!-- Modal para mensagens e confirmações -->
-    <div id="modal-overlay" class="modal-overlay fixed inset-0 bg-black bg-opacity-75 z-40 hidden flex items-center justify-center p-4" onclick="closeModal()">
-        <div id="modal-content" class="card p-6 w-11/12 md:w-full max-w-lg transition-all transform scale-100 duration-300" onclick="event.stopPropagation()">
-            <h3 id="modal-title" class="text-xl font-bold mb-4 text-[#ff7e5f]"></h3>
-            <p id="modal-message" class="mb-6"></p>
-            <div id="modal-actions" class="flex justify-end space-x-3">
-                <button onclick="closeModal()" class="btn-secondary px-4 py-2 rounded-lg">Fechar</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Container Principal (Responsivo) -->
-    <div class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
-        
-        <!-- Cabeçalho -->
-        <header class="header-gradient p-4 sm:p-6 rounded-xl mb-6 shadow-xl">
-            <div class="flex flex-col sm:flex-row justify-between items-center">
-                <h1 class="text-3xl sm:text-4xl font-extrabold text-[#1a1a2e] mb-2 sm:mb-0">BarberFlow</h1>
-                <div id="view-switch-container" class="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-4">
-                    <button id="agendamento-btn" onclick="changeView('booking')" class="btn-secondary px-4 py-2 rounded-lg text-sm sm:text-base">Agendamento</button>
-                    <button id="admin-btn" onclick="handleRoleSelection()" class="btn-secondary px-4 py-2 rounded-lg text-sm sm:text-base">Admin</button>
-                    <button id="logout-btn" onclick="logout()" class="btn-secondary px-4 py-2 rounded-lg text-sm sm:text-base hidden">Logout</button>
-                </div>
-            </div>
-        </header>
-
-        <!-- Área de visualização principal -->
-        <div id="app-view-container">
-            
-            <!-- Login View -->
-            <div id="login-view" class="hidden">
-                <div class="card p-6 max-w-sm mx-auto">
-                    <h2 class="text-2xl font-bold mb-4 text-[#ff7e5f]">Acesso Administrativo</h2>
-                    <input type="password" id="admin-password" placeholder="Senha de Admin" class="input-style mb-4">
-                    <button onclick="handleAdminLogin()" class="btn-primary w-full py-2 rounded-lg">Entrar</button>
-                    <p id="login-error" class="text-red-400 mt-3 text-center hidden">Senha incorreta</p>
-                </div>
-            </div>
-
-            <!-- Booking View (Agendamento) -->
-            <div id="booking-view" class="hidden card p-4 sm:p-6">
-                <h2 class="text-2xl font-bold mb-4 text-[#ff7e5f]">Agende seu Horário</h2>
-                <form id="appointment-form" class="space-y-4">
-                    <!-- Informações do Cliente -->
-                    <div>
-                        <label for="client_name" class="block text-sm font-medium mb-1">Seu Nome:</label>
-                        <input type="text" id="client_name" name="client_name" required class="input-style">
-                    </div>
-                    <div>
-                        <label for="client_phone" class="block text-sm font-medium mb-1">Telefone (Whatsapp):</label>
-                        <input type="tel" id="client_phone" name="client_phone" required class="input-style">
-                    </div>
-                    
-                    <!-- Seleção de Serviço -->
-                    <div>
-                        <label for="service_id" class="block text-sm font-medium mb-1">Serviço:</label>
-                        <select id="service_id" name="service_id" required class="input-style">
-                            <option value="">Selecione um serviço</option>
-                        </select>
-                        <p id="service-info" class="text-sm mt-1 text-gray-400"></p>
-                    </div>
-
-                    <!-- Seleção de Data -->
-                    <div>
-                        <label for="appointment_date" class="block text-sm font-medium mb-2">Selecione a Data:</label>
-                        <div id="date-picker-container" class="grid grid-cols-3 md:grid-cols-7 gap-2">
-                            <!-- Botões de data serão injetados aqui -->
-                        </div>
-                        <input type="hidden" id="appointment_date" name="date" required>
-                    </div>
-
-                    <!-- Seleção de Horário -->
-                    <div id="time-slot-area" class="hidden">
-                        <label for="appointment_time" class="block text-sm font-medium mb-2">Horários Disponíveis:</label>
-                        <div id="time-slots-container" class="flex flex-wrap gap-2 max-h-60 overflow-y-auto card p-3">
-                            <!-- Slots de horário serão injetados aqui -->
-                        </div>
-                        <input type="hidden" id="appointment_time" name="time" required>
-                    </div>
-                    
-                    <button type="submit" class="btn-primary w-full py-3 rounded-lg text-lg">Confirmar Agendamento</button>
-                    <p id="booking-message" class="mt-4 text-center text-green-400 hidden"></p>
-                </form>
-            </div>
-
-            <!-- Schedule View (Agenda do Admin) -->
-            <div id="schedule-view" class="hidden card p-4 sm:p-6">
-                <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-4 space-y-3 sm:space-y-0">
-                    <h2 class="text-2xl font-bold text-[#ff7e5f]">Agenda de Hoje</h2>
-                    <input type="date" id="schedule_date_picker" class="input-style max-w-full sm:max-w-xs">
-                </div>
-
-                <div id="schedule-list" class="space-y-4">
-                    <!-- Agendamentos serão injetados aqui -->
-                </div>
-                <p id="schedule-empty-message" class="text-center text-gray-400 mt-6 hidden">Nenhum agendamento para a data selecionada.</p>
-            </div>
-
-            <!-- Admin View -->
-            <div id="admin-view" class="hidden">
-                <h2 class="text-3xl font-bold mb-4 text-[#ff7e5f] text-center sm:text-left">Painel Administrativo</h2>
-                
-                <!-- Navegação por Tabs (Responsiva) -->
-                <div class="tab-scroll-container border-b border-[#3b3b54] mb-6">
-                    <div class="flex space-x-4">
-                        <button class="tab-btn px-4 py-2 font-medium tab-active" data-tab="dashboard" onclick="changeAdminTab('dashboard')">Dashboard</button>
-                        <button class="tab-btn px-4 py-2 font-medium" data-tab="services" onclick="changeAdminTab('services')">Serviços</button>
-                        <button class="tab-btn px-4 py-2 font-medium" data-tab="expenses" onclick="changeAdminTab('expenses')">Despesas</button>
-                        <button class="tab-btn px-4 py-2 font-medium" data-tab="archive" onclick="changeAdminTab('archive')">Arquivados</button>
-                    </div>
-                </div>
-
-                <!-- Conteúdo dos Tabs -->
-                <div id="admin-content-container">
-                    
-                    <!-- Dashboard Tab -->
-                    <div id="dashboard-tab" class="admin-tab-content">
-                        <h3 class="text-xl font-bold mb-4">Resumo Financeiro</h3>
-                        
-                        <div class="flex flex-col sm:flex-row sm:space-x-3 mb-6 space-y-3 sm:space-y-0">
-                            <input type="month" id="summary-month-year" class="input-style sm:max-w-xs" value="{current_month_year_str}">
-                            <button onclick="loadMonthlySummary()" class="btn-secondary px-4 py-2 rounded-lg">Ver Resumo</button>
-                        </div>
-
-                        <!-- Cards de Estatísticas (Responsivos) -->
-                        <div id="dashboard-stats" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-                            <div class="card p-4 text-center">
-                                <p class="text-2xl font-bold text-green-400" id="stat-revenue">R$ 0,00</p>
-                                <p class="text-sm text-gray-400">Receita (Concluído)</p>
-                            </div>
-                            <div class="card p-4 text-center">
-                                <p class="text-2xl font-bold text-red-400" id="stat-expenses">R$ 0,00</p>
-                                <p class="text-sm text-gray-400">Total Despesas</p>
-                            </div>
-                            <div class="card p-4 text-center">
-                                <p class="text-2xl font-bold text-red-300" id="stat-fixed-expense">R$ 0,00</p>
-                                <p class="text-sm text-gray-400">Desp. Fixa</p>
-                            </div>
-                            <div class="card p-4 text-center">
-                                <p class="text-2xl font-bold" id="stat-profit">R$ 0,00</p>
-                                <p class="text-sm text-gray-400">Lucro Líquido</p>
-                            </div>
-                        </div>
-
-                        <h3 class="text-xl font-bold mb-4">Gerenciamento Rápido</h3>
-                        <!-- Link para a agenda de hoje -->
-                        <button onclick="changeView('schedule')" class="btn-primary w-full sm:w-auto py-2 px-4 rounded-lg">Ver Agenda do Dia</button>
-                    </div>
-
-                    <!-- Services Tab -->
-                    <div id="services-tab" class="admin-tab-content hidden">
-                        <h3 class="text-xl font-bold mb-4">Cadastro de Serviços</h3>
-                        <form id="service-form" class="card p-4 sm:p-6 mb-6 grid grid-cols-1 sm:grid-cols-4 gap-4 items-end">
-                            <input type="hidden" id="service_id_edit">
-                            <div class="sm:col-span-2">
-                                <label for="service_name" class="block text-sm font-medium mb-1">Nome:</label>
-                                <input type="text" id="service_name" required class="input-style">
-                            </div>
-                            <div>
-                                <label for="service_price" class="block text-sm font-medium mb-1">Preço (R$):</label>
-                                <input type="number" step="0.01" id="service_price" required class="input-style">
-                            </div>
-                            <div>
-                                <label for="service_duration" class="block text-sm font-medium mb-1">Duração (min):</label>
-                                <input type="number" step="15" id="service_duration" required class="input-style">
-                            </div>
-                            <div class="sm:col-span-4 flex space-x-3">
-                                <button type="submit" class="btn-primary flex-grow py-2 rounded-lg" id="service-submit-btn">Adicionar Serviço</button>
-                                <button type="button" onclick="clearServiceForm()" class="btn-secondary py-2 px-4 rounded-lg" id="service-cancel-btn" style="display: none;">Cancelar Edição</button>
-                            </div>
-                        </form>
-
-                        <h3 class="text-xl font-bold mb-4 mt-8">Lista de Serviços</h3>
-                        <div id="services-list" class="space-y-3">
-                            <!-- Lista de serviços será injetada aqui -->
-                        </div>
-                    </div>
-
-                    <!-- Expenses Tab -->
-                    <div id="expenses-tab" class="admin-tab-content hidden">
-                        <h3 class="text-xl font-bold mb-4">Lançamento de Despesa Variável</h3>
-                        <form id="expense-form" class="card p-4 sm:p-6 mb-6 grid grid-cols-1 sm:grid-cols-4 gap-4 items-end">
-                            <div class="sm:col-span-2">
-                                <label for="expense_description" class="block text-sm font-medium mb-1">Descrição:</label>
-                                <input type="text" id="expense_description" required class="input-style">
-                            </div>
-                            <div>
-                                <label for="expense_amount" class="block text-sm font-medium mb-1">Valor (R$):</label>
-                                <input type="number" step="0.01" id="expense_amount" required class="input-style">
-                            </div>
-                            <div>
-                                <label for="expense_date" class="block text-sm font-medium mb-1">Data:</label>
-                                <input type="date" id="expense_date" required class="input-style" value="{today_date_str}">
-                            </div>
-                            <div class="sm:col-span-4">
-                                <button type="submit" class="btn-primary w-full py-2 rounded-lg">Adicionar Despesa</button>
-                            </div>
-                        </form>
-
-                        <h3 class="text-xl font-bold mb-4 mt-8">Despesas Variáveis Lançadas (<span id="expense-month-display">{current_month_name}</span>)</h3>
-                        <div class="flex mb-4">
-                             <input type="month" id="expense-month-year" class="input-style max-w-full sm:max-w-xs" value="{current_month_year_str}" onchange="loadExpenses()">
-                        </div>
-                        
-                        <div id="expenses-list" class="space-y-3">
-                            <!-- Lista de despesas será injetada aqui -->
-                        </div>
-                        <p id="expenses-empty-message" class="text-center text-gray-400 mt-6 hidden">Nenhuma despesa variável lançada para este mês.</p>
-                    </div>
-                    
-                    <!-- Archive Tab -->
-                    <div id="archive-tab" class="admin-tab-content hidden">
-                        <h3 class="text-xl font-bold mb-4">Agendamentos Arquivados</h3>
-                        <p class="text-gray-400 mb-4">Estes são agendamentos que foram finalizados e movidos para o arquivo.</p>
-                        
-                        <div class="flex flex-col sm:flex-row sm:space-x-3 mb-6 space-y-3 sm:space-y-0">
-                            <input type="date" id="archive_date_picker" class="input-style max-w-full sm:max-w-xs">
-                            <button onclick="loadArchivedAppointments()" class="btn-secondary px-4 py-2 rounded-lg">Buscar Data</button>
-                        </div>
-
-                        <div id="archived-list" class="space-y-4">
-                            <!-- Agendamentos arquivados serão injetados aqui -->
-                        </div>
-                        <p id="archive-empty-message" class="text-center text-gray-400 mt-6 hidden">Nenhum agendamento arquivado para a data selecionada.</p>
-                    </div>
-
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        // --- VARIÁVEIS GLOBAIS ---
-        let currentView = 'booking';
-        let currentAdminTab = 'dashboard';
-        let servicesData = [];
-
-        // Tradução dos nomes dos meses para o display (necessário para a função loadExpenses/Summary)
-        const monthNames = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-            "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
-        ];
-        
-        // --- UI E UTILS ---
-
-        function showModal(title, message, actions = null) {{
-            document.getElementById('modal-title').textContent = title;
-            document.getElementById('modal-message').textContent = message;
-            
-            const actionContainer = document.getElementById('modal-actions');
-            actionContainer.innerHTML = '';
-            
-            // Botão padrão de fechar
-            const closeButton = document.createElement('button');
-            closeButton.textContent = 'Fechar';
-            closeButton.onclick = closeModal;
-            closeButton.className = 'btn-secondary px-4 py-2 rounded-lg';
-            actionContainer.appendChild(closeButton);
-
-            if (actions) {{
-                // Adiciona botões de ação customizados ANTES do botão Fechar
-                actions.forEach(action => {{
-                    const btn = document.createElement('button');
-                    btn.textContent = action.text;
-                    btn.onclick = () => {{
-                        closeModal();
-                        action.callback();
-                    }};
-                    btn.className = action.is_primary ? 'btn-primary px-4 py-2 rounded-lg' : 'btn-secondary px-4 py-2 rounded-lg';
-                    actionContainer.insertBefore(btn, closeButton);
-                }});
-            }}
-
-            document.getElementById('modal-overlay').classList.remove('hidden');
-        }}
-
-        function closeModal() {{
-            document.getElementById('modal-overlay').classList.add('hidden');
-        }}
-
-        function showLoading(isVisible) {{
-            const overlay = document.getElementById('loading-overlay');
-            if (isVisible) {{
-                overlay.classList.remove('hidden');
-            }} else {{
-                overlay.classList.add('hidden');
-            }}
-        }}
-
-        function changeView(newView) {{
-            if (newView === 'schedule' && !session.is_admin) {{
-                newView = 'booking'; // Fallback se não for admin
-            }}
-
-            currentView = newView;
-            document.querySelectorAll('#app-view-container > div').forEach(el => {{
-                el.classList.add('hidden');
-            }});
-            
-            // Mostra a view correta
-            const viewElement = document.getElementById(newView + '-view');
-            if (viewElement) {{
-                viewElement.classList.remove('hidden');
-            }} else if (newView === 'schedule') {{
-                // Se for 'schedule', garante que a view de admin (que contém schedule) está visível
-                document.getElementById('admin-view').classList.remove('hidden');
-            }}
-            
-            // Gerencia os botões de navegação
-            const adminBtn = document.getElementById('admin-btn');
-            const logoutBtn = document.getElementById('logout-btn');
-            const agendamentoBtn = document.getElementById('agendamento-btn');
-            const viewSwitchContainer = document.getElementById('view-switch-container');
-
-            if (session.is_admin) {{
-                adminBtn.classList.add('hidden');
-                logoutBtn.classList.remove('hidden');
-                viewSwitchContainer.classList.remove('hidden');
-            }} else {{
-                adminBtn.classList.remove('hidden');
-                logoutBtn.classList.add('hidden');
-                viewSwitchContainer.classList.remove('hidden');
-            }}
-
-            if (newView === 'schedule' || newView === 'admin') {{
-                // Garante que o painel de admin esteja visível
-                document.getElementById('admin-view').classList.remove('hidden');
-                changeAdminTab(newAdminTab || 'dashboard'); // Redireciona para o dashboard ou tab atual
-                document.getElementById('schedule-date-picker').value = new Date().toISOString().split('T')[0];
-                loadAppointments();
-            }} else if (newView === 'booking') {{
-                loadServices().then(renderDateButtons);
-            }}
-
-            // Atualiza o texto do botão Admin/Agendamento
-            if (session.is_admin) {{
-                 if (newView === 'schedule') {{
-                    agendamentoBtn.textContent = 'Agendamento (Cliente)';
-                 }} else {{
-                    agendamentoBtn.textContent = 'Agenda (Admin)';
-                 }}
-            }}
-        }}
-
-        function changeAdminTab(newTab) {{
-            currentAdminTab = newTab;
-            
-            document.querySelectorAll('.admin-tab-content').forEach(el => el.classList.add('hidden'));
-            document.getElementById(newTab + '-tab').classList.remove('hidden');
-            
-            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('tab-active'));
-            document.querySelector(`.tab-btn[data-tab="${newTab}"]`).classList.add('tab-active');
-
-            if (newTab === 'services') {{
-                loadServices(true); // Recarrega para o admin
-            }} else if (newTab === 'expenses') {{
-                loadExpenses();
-            }} else if (newTab === 'dashboard') {{
-                loadMonthlySummary();
-            }} else if (newTab === 'archive') {{
-                // Garante que a data de arquivados é a de hoje ao abrir
-                document.getElementById('archive_date_picker').value = new Date().toISOString().split('T')[0];
-                loadArchivedAppointments();
-            }}
-        }}
-        
-        function formatCurrency(amount) {{
-            return new Intl.NumberFormat('pt-BR', {{ style: 'currency', currency: 'BRL' }}).format(amount);
-        }}
-
-        // --- AUTENTICAÇÃO E SESSÃO ---
-
-        const session = {{ is_admin: false, init: false }};
-
-        function handleRoleSelection() {{
-            if (session.is_admin) {{
-                // Se já for admin, vai direto para a agenda
-                changeView('schedule');
-            }} else {{
-                // Se não for admin, mostra o login
-                document.getElementById('login-view').classList.remove('hidden');
-                document.getElementById('booking-view').classList.add('hidden');
-            }}
-        }}
-
-        function handleAdminLogin() {{
-            showLoading(true);
-            const password = document.getElementById('admin-password').value;
-            fetch('/admin/login', {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{ password: password }})
-            }})
-            .then(res => res.json())
-            .then(data => {{
-                showLoading(false);
-                if (data.message) {{
-                    session.is_admin = true;
-                    document.getElementById('login-view').classList.add('hidden');
-                    document.getElementById('admin-password').value = '';
-                    changeView('schedule'); // Vai para a agenda ao logar
-                }} else {{
-                    document.getElementById('login-error').classList.remove('hidden');
-                    setTimeout(() => document.getElementById('login-error').classList.add('hidden'), 3000);
-                }}
-            }})
-            .catch(error => {{
-                showLoading(false);
-                console.error('Login error:', error);
-                showModal('Erro', 'Não foi possível conectar ao servidor de login.');
-            }});
-        }}
-
-        function logout() {{
-            showLoading(true);
-            fetch('/logout', {{ method: 'POST' }})
-            .then(() => {{
-                session.is_admin = false;
-                document.getElementById('logout-btn').classList.add('hidden');
-                document.getElementById('admin-btn').classList.remove('hidden');
-                document.getElementById('login-view').classList.add('hidden');
-                showLoading(false);
-                changeView('booking'); // Volta para a view de agendamento cliente
-            }})
-            .catch(() => {{
-                showLoading(false);
-                showModal('Erro', 'Não foi possível fazer logout.');
-            }});
-        }}
-
-        // --- FUNÇÕES DE CARREGAMENTO DE DADOS ---
-        
-        function loadServices(isAdmin = false) {{
-            return new Promise((resolve, reject) => {{
-                fetch('/api/services')
-                .then(res => res.json())
-                .then(data => {{
-                    servicesData = data;
-                    if (!isAdmin) {{
-                        renderServiceSelect(data);
-                    }} else {{
-                        renderServicesList(data);
-                    }}
-                    resolve(data);
-                }})
-                .catch(error => {{
-                    console.error('Erro ao carregar serviços:', error);
-                    showModal('Erro', 'Não foi possível carregar a lista de serviços.');
-                    reject(error);
-                }});
-            }});
-        }}
-
-        function loadAppointments() {{
-            const date = document.getElementById('schedule_date_picker').value;
-            if (!date) return;
-            showLoading(true);
-            
-            fetch(`/api/appointments/${{date}}`)
-            .then(res => res.json())
-            .then(data => {{
-                showLoading(false);
-                if (data.error) {{
-                    showModal('Erro', data.error);
-                    return;
-                }}
-                renderAppointmentsList(data);
-            }})
-            .catch(error => {{
-                showLoading(false);
-                console.error('Erro ao carregar agendamentos:', error);
-                showModal('Erro', 'Não foi possível carregar os agendamentos.');
-            }});
-        }}
-        
-        function loadArchivedAppointments() {{
-            const date = document.getElementById('archive_date_picker').value;
-            if (!date) return;
-            showLoading(true);
-            
-            fetch(`/api/appointments/${{date}}?include_archived=true`)
-            .then(res => res.json())
-            .then(data => {{
-                showLoading(false);
-                if (data.error) {{
-                    showModal('Erro', data.error);
-                    return;
-                }}
-                // Filtra apenas os arquivados para esta view
-                const archived = data.filter(app => app.archived === true);
-                renderArchivedList(archived);
-            }})
-            .catch(error => {{
-                showLoading(false);
-                console.error('Erro ao carregar arquivados:', error);
-                showModal('Erro', 'Não foi possível carregar os agendamentos arquivados.');
-            }});
-        }}
-
-        function loadAppointmentSlots(date) {{
-            showLoading(true);
-            return fetch(`/api/slots/${{date}}`)
-                .then(res => res.json())
-                .then(data => {{
-                    showLoading(false);
-                    if (data.error) {{
-                        showModal('Erro', data.error);
-                        return [];
-                    }}
-                    return data;
-                }})
-                .catch(error => {{
-                    showLoading(false);
-                    console.error('Erro ao carregar slots:', error);
-                    showModal('Erro', 'Não foi possível carregar os horários disponíveis.');
-                    return [];
-                }});
-        }}
-
-        function loadMonthlySummary() {{
-            const monthYearInput = document.getElementById('summary-month-year').value;
-            if (!monthYearInput) return;
-            
-            const [year, month] = monthYearInput.split('-').map(Number);
-            if (!month || !year) return;
-
-            showLoading(true);
-            fetch(`/api/admin/summary/${{month}}/${{year}}`)
-            .then(res => res.json())
-            .then(data => {{
-                showLoading(false);
-                if (data.error) {{
-                    showModal('Erro', data.error);
-                    return;
-                }}
-                document.getElementById('stat-revenue').textContent = formatCurrency(data.total_revenue);
-                document.getElementById('stat-expenses').textContent = formatCurrency(data.total_expense);
-                document.getElementById('stat-fixed-expense').textContent = formatCurrency(data.fixed_expense);
-                
-                const profitElement = document.getElementById('stat-profit');
-                profitElement.textContent = formatCurrency(data.net_profit);
-                
-                // Cor do lucro
-                if (data.net_profit >= 0) {{
-                    profitElement.classList.remove('text-red-400');
-                    profitElement.classList.add('text-green-400');
-                }} else {{
-                    profitElement.classList.remove('text-green-400');
-                    profitElement.classList.add('text-red-400');
-                }}
-            }})
-            .catch(error => {{
-                showLoading(false);
-                console.error('Erro ao carregar resumo:', error);
-                showModal('Erro', 'Não foi possível carregar o resumo financeiro.');
-            }});
-        }}
-
-        function loadExpenses() {{
-            const monthYearInput = document.getElementById('expense-month-year').value;
-            if (!monthYearInput) return;
-            
-            const [year, month] = monthYearInput.split('-').map(Number);
-            if (!month || !year) return;
-
-            // Atualiza o display do mês
-            document.getElementById('expense-month-display').textContent = monthNames[month - 1];
-
-            showLoading(true);
-            fetch(`/api/admin/expenses/${{month}}/${{year}}`)
-            .then(res => res.json())
-            .then(data => {{
-                showLoading(false);
-                if (data.error) {{
-                    showModal('Erro', data.error);
-                    return;
-                }}
-                renderExpensesList(data);
-            }})
-            .catch(error => {{
-                showLoading(false);
-                console.error('Erro ao carregar despesas:', error);
-                showModal('Erro', 'Não foi possível carregar as despesas.');
-            }});
-        }}
-
-        // --- FUNÇÕES DE RENDERIZAÇÃO ---
-        
-        function renderServiceSelect(services) {{
-            const select = document.getElementById('service_id');
-            select.innerHTML = '<option value="">Selecione um serviço</option>';
-            services.forEach(service => {{
-                const option = document.createElement('option');
-                option.value = service.id;
-                option.textContent = `\${{service.name}} (\${{formatCurrency(service.price)}} - \${{service.duration_minutes}} min)`;
-                option.dataset.price = service.price;
-                option.dataset.duration = service.duration_minutes;
-                select.appendChild(option);
-            }});
-            
-            // Adiciona listener para mostrar info do serviço
-            select.onchange = () => {{
-                const selectedOption = select.options[select.selectedIndex];
-                const infoElement = document.getElementById('service-info');
-                if (selectedOption.value) {{
-                    infoElement.textContent = `Preço: \${{formatCurrency(parseFloat(selectedOption.dataset.price))}} | Duração: \${{selectedOption.dataset.duration}} minutos.`;
-                }} else {{
-                    infoElement.textContent = '';
-                }}
-                
-                // Reseta a seleção de horário ao mudar o serviço
-                document.getElementById('appointment_date').value = '';
-                document.getElementById('appointment_time').value = '';
-                document.getElementById('time-slot-area').classList.add('hidden');
-                document.querySelectorAll('.day-btn.selected').forEach(btn => btn.classList.remove('selected', 'bg-red-500'));
-            }};
-        }}
-
-        function renderServicesList(services) {{
-            const listContainer = document.getElementById('services-list');
-            listContainer.innerHTML = '';
-
-            if (services.length === 0) {{
-                listContainer.innerHTML = '<p class="text-center text-gray-400">Nenhum serviço cadastrado.</p>';
-                return;
-            }}
-
-            services.forEach(service => {{
-                const div = document.createElement('div');
-                div.className = 'card p-3 flex flex-col sm:flex-row justify-between items-start sm:items-center space-y-2 sm:space-y-0';
-                div.innerHTML = `
-                    <div>
-                        <p class="font-semibold text-lg">\${{service.name}}</p>
-                        <p class="text-sm text-gray-400">\${{formatCurrency(service.price)}} / \${{service.duration_minutes}} min</p>
-                    </div>
-                    <div class="flex space-x-2">
-                        <button onclick="editService(\${{service.id}})" class="btn-secondary px-3 py-1 rounded-lg text-sm">Editar</button>
-                        <button onclick="deleteService(\${{service.id}})" class="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-lg text-sm">Excluir</button>
-                    </div>
-                `;
-                listContainer.appendChild(div);
-            }});
-        }}
-
-        function renderDateButtons() {{
-            const container = document.getElementById('date-picker-container');
-            container.innerHTML = '';
-            
-            // Cria botões para os próximos 7 dias
-            for (let i = 0; i < 7; i++) {{
-                const day = new Date();
-                day.setDate(day.getDate() + i);
-                const dayStr = day.toISOString().split('T')[0];
-                const dayName = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'][day.getDay()];
-                
-                const button = document.createElement('button');
-                button.className = 'day-btn btn-secondary px-3 py-2 rounded-lg text-center transition-colors duration-200';
-                button.dataset.date = dayStr;
-                button.innerHTML = `
-                    <span class="block font-bold text-sm">\${{dayName}}</span>
-                    <span class="block text-xs">\${{day.getDate()}}/{{day.getMonth() + 1}}</span>
-                `;
-                button.onclick = () => selectAppointmentDate(dayStr, button);
-                container.appendChild(button);
-            }}
-        }}
-
-        function renderTimeSlots(slots) {{
-            const container = document.getElementById('time-slots-container');
-            container.innerHTML = '';
-            const timeInput = document.getElementById('appointment_time');
-            timeInput.value = ''; // Reseta a seleção de horário
-
-            if (slots.length === 0) {{
-                container.innerHTML = '<p class="text-center text-gray-400">Nenhum horário disponível.</p>';
-                document.getElementById('time-slot-area').classList.remove('hidden');
-                return;
-            }}
-
-            slots.forEach(slot => {{
-                const button = document.createElement('button');
-                button.className = 'slot-btn btn-secondary px-3 py-1 rounded-lg text-sm transition-colors duration-200';
-                button.textContent = slot;
-                button.dataset.time = slot;
-                button.onclick = () => selectAppointmentTime(slot, button);
-                container.appendChild(button);
-            }});
-            
-            document.getElementById('time-slot-area').classList.remove('hidden');
-        }}
-
-        function renderAppointmentsList(appointments) {{
-            const listContainer = document.getElementById('schedule-list');
-            listContainer.innerHTML = '';
-            
-            if (appointments.length === 0) {{
-                document.getElementById('schedule-empty-message').classList.remove('hidden');
-                return;
-            }}
-            document.getElementById('schedule-empty-message').classList.add('hidden');
-
-            appointments.forEach(app => {{
-                let statusColor = '';
-                let statusText = '';
-                switch (app.status) {{
-                    case 'Agendado': statusColor = 'bg-yellow-500'; statusText = 'Agendado'; break;
-                    case 'Confirmado': statusColor = 'bg-blue-500'; statusText = 'Confirmado'; break;
-                    case 'Cancelado': statusColor = 'bg-red-500'; statusText = 'Cancelado'; break;
-                    case 'Concluído': statusColor = 'bg-green-500'; statusText = 'Concluído'; break;
-                    default: statusColor = 'bg-gray-500'; statusText = 'Desconhecido';
-                }}
-                
-                const appCard = document.createElement('div');
-                appCard.className = `card p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center space-y-3 sm:space-y-0 border-l-4 rounded-lg \${{app.archived ? 'border-gray-500 opacity-60' : 'border-[#ff7e5f]'}}`;
-                appCard.innerHTML = `
-                    <!-- Detalhes (Ocupa 3/4 no desktop, full na mobile) -->
-                    <div class="w-full sm:w-3/4 space-y-1">
-                        <p class="text-xl font-bold text-white">\${{app.appointment_time}} - \${{app.service_name}}</p>
-                        <p class="text-gray-300">Cliente: \${{app.client_name}}</p>
-                        <p class="text-gray-400">Tel: \${{app.client_phone}}</p>
-                        <div class="mt-2">
-                            <span class="inline-block px-3 py-1 text-xs font-semibold rounded-full text-black \${{statusColor}}">\${{statusText}}</span>
-                            \${{app.archived ? '<span class="inline-block px-3 py-1 text-xs font-semibold rounded-full bg-gray-600 text-white ml-2">Arquivado</span>' : ''}}
-                        </div>
-                    </div>
-                    
-                    <!-- Ações (Ocupa 1/4 no desktop, full na mobile) -->
-                    <div class="w-full sm:w-1/4 flex flex-wrap gap-2 justify-end">
-                        <select onchange="updateAppointmentStatus(\${{app.id}}, this.value)" class="input-style text-sm py-1 px-2 rounded-lg \${{app.archived ? 'hidden' : ''}}">
-                            <option value="Agendado" \${{app.status === 'Agendado' ? 'selected' : ''}}>Agendado</option>
-                            <option value="Confirmado" \${{app.status === 'Confirmado' ? 'selected' : ''}}>Confirmado</option>
-                            <option value="Concluído" \${{app.status === 'Concluído' ? 'selected' : ''}}>Concluído</option>
-                            <option value="Cancelado" \${{app.status === 'Cancelado' ? 'selected' : ''}}>Cancelado</option>
-                        </select>
-                        <button onclick="archiveAppointment(\${{app.id}})" class="btn-secondary px-3 py-1 rounded-lg text-sm \${{app.archived ? 'hidden' : ''}}">Arquivar</button>
-                    </div>
-                `;
-                listContainer.appendChild(appCard);
-            }});
-        }}
-        
-        function renderArchivedList(appointments) {{
-            const listContainer = document.getElementById('archived-list');
-            listContainer.innerHTML = '';
-
-            if (appointments.length === 0) {{
-                document.getElementById('archive-empty-message').classList.remove('hidden');
-                return;
-            }}
-            document.getElementById('archive-empty-message').classList.add('hidden');
-
-            appointments.forEach(app => {{
-                let statusColor = '';
-                switch (app.status) {{
-                    case 'Concluído': statusColor = 'bg-green-500'; break;
-                    case 'Cancelado': statusColor = 'bg-red-500'; break;
-                    default: statusColor = 'bg-gray-500';
-                }}
-                
-                const appCard = document.createElement('div');
-                appCard.className = `card p-4 flex justify-between items-center border-l-4 border-gray-500 opacity-80`;
-                appCard.innerHTML = `
-                    <div>
-                        <p class="font-bold">\${{app.appointment_time}} - \${{app.service_name}}</p>
-                        <p class="text-sm text-gray-400">\${{app.client_name}} | Status: <span class="text-white \${{statusColor}} px-2 py-0.5 rounded text-xs">\${{app.status}}</span></p>
-                    </div>
-                `;
-                listContainer.appendChild(appCard);
-            }});
-        }}
-
-
-        function renderExpensesList(expenses) {{
-            const listContainer = document.getElementById('expenses-list');
-            listContainer.innerHTML = '';
-
-            if (expenses.length === 0) {{
-                document.getElementById('expenses-empty-message').classList.remove('hidden');
-                return;
-            }}
-            document.getElementById('expenses-empty-message').classList.add('hidden');
-
-            expenses.forEach(expense => {{
-                const div = document.createElement('div');
-                div.className = 'card p-3 flex flex-col sm:flex-row justify-between items-start sm:items-center space-y-2 sm:space-y-0 border-l-4 border-red-500';
-                div.innerHTML = `
-                    <div class="w-full sm:w-2/3">
-                        <p class="font-semibold text-lg">\${{expense.description}}</p>
-                        <p class="text-sm text-gray-400">Data: \${{expense.expense_date}}</p>
-                    </div>
-                    <div class="flex items-center space-x-3 w-full sm:w-1/3 justify-between sm:justify-end">
-                        <p class="text-red-400 font-bold">\${{formatCurrency(expense.amount)}}</p>
-                        <button onclick="deleteExpense(\${{expense.id}})" class="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-lg text-sm">Excluir</button>
-                    </div>
-                `;
-                listContainer.appendChild(div);
-            }});
-        }}
-
-
-        // --- FUNÇÕES DE INTERAÇÃO DO CLIENTE ---
-
-        function selectAppointmentDate(dateStr, button) {{
-            const serviceId = document.getElementById('service_id').value;
-            if (!serviceId) {{
-                showModal('Atenção', 'Por favor, selecione um serviço primeiro.');
-                return;
-            }}
-
-            document.querySelectorAll('.day-btn').forEach(btn => btn.classList.remove('bg-red-500', 'btn-primary', 'selected'));
-            button.classList.add('bg-red-500', 'selected'); // Usa cor de destaque
-            document.getElementById('appointment_date').value = dateStr;
-            document.getElementById('appointment_time').value = '';
-            
-            // Carregar slots para a data
-            loadAppointmentSlots(dateStr).then(slots => {{
-                renderTimeSlots(slots);
-            }});
-        }}
-
-        function selectAppointmentTime(timeStr, button) {{
-            document.querySelectorAll('.slot-btn').forEach(btn => btn.classList.remove('btn-primary', 'selected'));
-            button.classList.add('btn-primary', 'selected');
-            document.getElementById('appointment_time').value = timeStr;
-        }}
-
-        function handleAppointmentSubmit(event) {{
-            event.preventDefault();
-            showLoading(true);
-
-            const form = event.target;
-            const client_name = form.client_name.value;
-            const client_phone = form.client_phone.value;
-            const service_id = form.service_id.value;
-            const date = form.date.value;
-            const time = form.time.value;
-
-            if (!date || !time) {{
-                showLoading(false);
-                showModal('Atenção', 'Por favor, selecione a data e o horário.');
-                return;
-            }}
-
-            const payload = {{ client_name, client_phone, service_id: parseInt(service_id), date, time }};
-            
-            fetch('/api/appointments', {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify(payload)
-            }})
-            .then(res => res.json())
-            .then(data => {{
-                showLoading(false);
-                const msgElement = document.getElementById('booking-message');
-                msgElement.classList.remove('hidden');
-                
-                if (data.message) {{
-                    msgElement.textContent = data.message;
-                    msgElement.classList.remove('text-red-400');
-                    msgElement.classList.add('text-green-400');
-                    form.reset();
-                    // Limpar e renderizar novamente datas/slots
-                    document.getElementById('appointment_date').value = '';
-                    document.getElementById('appointment_time').value = '';
-                    document.getElementById('time-slot-area').classList.add('hidden');
-                    loadServices().then(renderDateButtons); 
-                }} else {{
-                    msgElement.textContent = data.error || 'Erro desconhecido ao agendar.';
-                    msgElement.classList.remove('text-green-400');
-                    msgElement.classList.add('text-red-400');
-                }}
-            }})
-            .catch(error => {{
-                showLoading(false);
-                showModal('Erro', 'Não foi possível completar o agendamento devido a um erro de rede.');
-            }});
-        }}
-
-        // --- FUNÇÕES DE INTERAÇÃO DO ADMIN ---
-
-        function updateAppointmentStatus(appId, status) {{
-            showLoading(true);
-            fetch(`/api/appointments/\${{appId}}/status`, {{
-                method: 'PUT',
-                headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{ status: status }})
-            }})
-            .then(res => res.json())
-            .then(data => {{
-                showLoading(false);
-                if (data.message) {{
-                    loadAppointments(); // Recarrega a lista
-                }} else {{
-                    showModal('Erro', data.error);
-                }}
-            }})
-            .catch(() => {{
-                showLoading(false);
-                showModal('Erro', 'Não foi possível atualizar o status.');
-            }});
-        }}
-        
-        function archiveAppointment(appId) {{
-            showModal(
-                'Confirmar Arquivamento',
-                'Tem certeza que deseja arquivar este agendamento?',
-                [{{
-                    text: 'Arquivar',
-                    is_primary: true,
-                    callback: () => {{
-                        showLoading(true);
-                        fetch(`/api/appointments/\${{appId}}/archive`, {{ method: 'PUT' }})
-                        .then(res => res.json())
-                        .then(data => {{
-                            showLoading(false);
-                            if (data.message) {{
-                                loadAppointments(); // Recarrega a lista da agenda atual
-                                showModal('Sucesso', data.message);
-                            }} else {{
-                                showModal('Erro', data.error);
-                            }}
-                        }})
-                        .catch(() => {{
-                            showLoading(false);
-                            showModal('Erro', 'Não foi possível arquivar o agendamento.');
-                        }});
-                    }}
-                }}]
-            );
-        }}
-
-        // Gerenciamento de Serviços
-        function clearServiceForm() {{
-            document.getElementById('service-form').reset();
-            document.getElementById('service_id_edit').value = '';
-            document.getElementById('service-submit-btn').textContent = 'Adicionar Serviço';
-            document.getElementById('service-cancel-btn').style.display = 'none';
-        }}
-
-        function editService(id) {{
-            const service = servicesData.find(s => s.id === id);
-            if (!service) return;
-            
-            document.getElementById('service_id_edit').value = service.id;
-            document.getElementById('service_name').value = service.name;
-            document.getElementById('service_price').value = service.price;
-            document.getElementById('service_duration').value = service.duration_minutes;
-            document.getElementById('service-submit-btn').textContent = 'Atualizar Serviço';
-            document.getElementById('service-cancel-btn').style.display = 'inline-block';
-        }}
-        
-        function deleteService(id) {{
-            showModal(
-                'Confirmar Exclusão',
-                'Tem certeza que deseja excluir este serviço? Esta ação não pode ser desfeita.',
-                [{{
-                    text: 'Excluir',
-                    is_primary: true,
-                    callback: () => {{
-                        showLoading(true);
-                        fetch(`/api/admin/services/\${{id}}`, {{ method: 'DELETE' }})
-                        .then(res => res.json())
-                        .then(data => {{
-                            showLoading(false);
-                            if (data.message) {{
-                                showModal('Sucesso', data.message);
-                                loadServices(true); // Recarrega a lista de serviços admin
-                            }} else {{
-                                showModal('Erro', data.error);
-                            }}
-                        }})
-                        .catch(() => {{
-                            showLoading(false);
-                            showModal('Erro', 'Não foi possível excluir o serviço.');
-                        }});
-                    }}
-                }}]
-            );
-        }}
-
-        function handleServiceSubmit(event) {{
-            event.preventDefault();
-            showLoading(true);
-
-            const id = document.getElementById('service_id_edit').value;
-            const name = document.getElementById('service_name').value;
-            const price = parseFloat(document.getElementById('service_price').value);
-            const duration_minutes = parseInt(document.getElementById('service_duration').value);
-
-            const method = id ? 'PUT' : 'POST';
-            const payload = id ? {{ id: parseInt(id), name, price, duration_minutes }} : {{ name, price, duration_minutes }};
-
-            fetch('/api/admin/services', {{
-                method: method,
-                headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify(payload)
-            }})
-            .then(res => res.json())
-            .then(data => {{
-                showLoading(false);
-                if (data.message) {{
-                    showModal('Sucesso', data.message);
-                    clearServiceForm();
-                    loadServices(true); // Recarrega a lista de serviços admin
-                }} else {{
-                    showModal('Erro', data.error);
-                }}
-            }})
-            .catch(() => {{
-                showLoading(false);
-                showModal('Erro', 'Não foi possível salvar o serviço.');
-            }});
-        }}
-
-        // Gerenciamento de Despesas
-        function handleExpenseSubmit(event) {{
-            event.preventDefault();
-            showLoading(true);
-
-            const form = event.target;
-            const description = form.expense_description.value;
-            const amount = parseFloat(form.expense_amount.value);
-            const expense_date = form.expense_date.value;
-            
-            if (isNaN(amount) || amount <= 0) {{
-                showLoading(false);
-                showModal('Atenção', 'Valor da despesa inválido.');
-                return;
-            }}
-
-            const payload = {{ description, amount, expense_date }};
-
-            fetch('/api/admin/expenses', {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify(payload)
-            }})
-            .then(res => res.json())
-            .then(data => {{
-                showLoading(false);
-                if (data.message) {{
-                    showModal('Sucesso', data.message);
-                    form.reset();
-                    // Garante que o input de data volte para a data atual, se aplicável
-                    form.expense_date.value = new Date().toISOString().split('T')[0]; 
-                    loadExpenses(); // Recarrega a lista de despesas
-                    loadMonthlySummary(); // Atualiza o dashboard
-                }} else {{
-                    showModal('Erro', data.error);
-                }}
-            }})
-            .catch(() => {{
-                showLoading(false);
-                showModal('Erro', 'Não foi possível adicionar a despesa.');
-            }});
-        }}
-        
-        function deleteExpense(id) {{
-            showModal(
-                'Confirmar Exclusão',
-                'Tem certeza que deseja excluir esta despesa?',
-                [{{
-                    text: 'Excluir',
-                    is_primary: true,
-                    callback: () => {{
-                        showLoading(true);
-                        fetch(`/api/admin/expenses/\${{id}}`, {{ method: 'DELETE' }})
-                        .then(res => res.json())
-                        .then(data => {{
-                            showLoading(false);
-                            if (data.message) {{
-                                showModal('Sucesso', data.message);
-                                loadExpenses(); // Recarrega a lista de despesas
-                                loadMonthlySummary(); // Atualiza o dashboard
-                            }} else {{
-                                showModal('Erro', data.error);
-                            }}
-                        }})
-                        .catch(() => {{
-                            showLoading(false);
-                            showModal('Erro', 'Não foi possível excluir a despesa.');
-                        }});
-                    }}
-                }}]
-            );
-        }}
-
-
-        // --- INICIALIZAÇÃO E EVENT LISTENERS ---
-
-        document.addEventListener('DOMContentLoaded', () => {{
-            // Inicialização da data do seletor da agenda e do arquivo
-            const today = new Date().toISOString().split('T')[0];
-            document.getElementById('schedule_date_picker').value = today;
-            document.getElementById('schedule_date_picker').addEventListener('change', loadAppointments);
-            
-            document.getElementById('archive_date_picker').value = today;
-            // O listener para archive_date_picker é no botão, para não carregar a cada mudança
-
-            // Event listener para o formulário de agendamento
-            document.getElementById('appointment-form').addEventListener('submit', handleAppointmentSubmit);
-
-            // Event listener para o formulário de serviço
-            document.getElementById('service-form').addEventListener('submit', handleServiceSubmit);
-            
-            // Event listener para o formulário de despesa
-            document.getElementById('expense-form').addEventListener('submit', handleExpenseSubmit);
-            
-            // Inicialização da view
-            initApp();
-        }});
-
-        function initApp() {{
-            showLoading(true);
-            fetch('/check_auth')
-                .then(res => res.json())
-                .then(data => {{
-                    session.is_admin = data.is_admin;
-                    session.init = true;
-
-                    if (session.is_admin) {{
-                        document.getElementById('login-view').classList.add('hidden');
-                        document.getElementById('booking-view').classList.add('hidden');
-                        document.getElementById('admin-view').classList.remove('hidden');
-                        document.getElementById('logout-btn').classList.remove('hidden');
-                        document.getElementById('admin-btn').classList.add('hidden');
-                        
-                        // Garante que o container de botões de visualização aparece para admin
-                        document.getElementById('view-switch-container').classList.remove('hidden');
-                        changeView('schedule');
-                    }} else {{
-                        document.getElementById('login-view').classList.add('hidden');
-                        document.getElementById('booking-view').classList.remove('hidden');
-                        document.getElementById('admin-view').classList.add('hidden');
-                        document.getElementById('logout-btn').classList.add('hidden');
-                        document.getElementById('admin-btn').classList.remove('hidden');
-                        
-                        // Garante que o container de botões de visualização aparece
-                        document.getElementById('view-switch-container').classList.remove('hidden');
-                        changeView('booking');
-                    }}
-                    showLoading(false); 
-                }})
-                .catch(() => {{
-                    // Em caso de erro, assume-se não logado e mostra a view de agendamento.
-                    session.is_admin = false;
-                    document.getElementById('login-view').classList.add('hidden');
-                    document.getElementById('booking-view').classList.remove('hidden');
-                    document.getElementById('admin-view').classList.add('hidden');
-                    showLoading(false);
-                    document.getElementById('view-switch-container').classList.remove('hidden');
-                    changeView('booking');
-                }});
-        }}
-
-
-        // --- EXPOSIÇÃO GLOBAL DE FUNÇÕES ---
-        window.changeView = changeView;
-        window.handleAppointmentSubmit = handleAppointmentSubmit;
-        window.changeAdminTab = changeAdminTab;
-        window.closeModal = closeModal;
-        window.updateAppointmentStatus = updateAppointmentStatus;
-        window.archiveAppointment = archiveAppointment; // NOVO
-        window.loadArchivedAppointments = loadArchivedAppointments; // NOVO
-        window.handleServiceSubmit = handleServiceSubmit;
-        window.clearServiceForm = clearServiceForm;
-        window.editService = editService;
-        window.deleteService = deleteService;
-        window.handleExpenseSubmit = handleExpenseSubmit;
-        window.deleteExpense = deleteExpense;
-        window.loadMonthlySummary = loadMonthlySummary;
-        window.loadExpenses = loadExpenses;
-        window.loadAppointments = loadAppointments;
-        window.handleRoleSelection = handleRoleSelection;
-        window.handleAdminLogin = handleAdminLogin;
-        window.logout = logout;
-
-    </script>
-</body>
-</html>
-"""
-    
-    # Prepara dados de data para inputs
-    today = date.today()
-    current_month_year_str = today.strftime('%Y-%m')
-    today_date_str = today.strftime('%Y-%m-%d')
-    current_month_name = calendar.month_name[today.month]
-
-    # Renderiza o template com as variáveis de data
-    return render_template_string(html_content, 
-                                  current_month_year_str=current_month_year_str,
-                                  today_date_str=today_date_str,
-                                  current_month_name=current_month_name)
-
-def setup_db_schema():
-    """Cria as tabelas do DB se não existirem."""
+def initialize_db():
+    """Cria as tabelas Services, Appointments, Monthly_Expenses e garante a coluna 'is_archived'."""
     conn = get_db_connection()
     if conn is None:
         return
@@ -1684,44 +41,1663 @@ def setup_db_schema():
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS services (
                     id SERIAL PRIMARY KEY,
-                    name VARCHAR(255) NOT NULL,
-                    price DECIMAL(10, 2) NOT NULL,
-                    duration_minutes INTEGER NOT NULL
+                    name VARCHAR(100) NOT NULL UNIQUE,
+                    price NUMERIC(10, 2) NOT NULL,
+                    duration INTEGER NOT NULL
                 );
             """)
 
-            # Tabela de Agendamentos
+            # Tabela de Agendamentos (Adicionando a coluna is_archived no SQL base para garantir)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS appointments (
                     id SERIAL PRIMARY KEY,
-                    client_name VARCHAR(255) NOT NULL,
+                    barber_id VARCHAR(50) NOT NULL,
+                    service_name VARCHAR(100) NOT NULL,
+                    appointment_date DATE NOT NULL,
+                    appointment_time VARCHAR(10) NOT NULL,
+                    client_name VARCHAR(100) NOT NULL,
                     client_phone VARCHAR(20),
-                    service_id INTEGER REFERENCES services(id) ON DELETE RESTRICT,
-                    appointment_datetime TIMESTAMP WITH TIME ZONE NOT NULL,
-                    status VARCHAR(50) NOT NULL DEFAULT 'Agendado',
-                    archived BOOLEAN DEFAULT FALSE
+                    client_email VARCHAR(100),
+                    service_price NUMERIC(10, 2) NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'Agendado',
+                    is_archived BOOLEAN NOT NULL DEFAULT FALSE, -- NOVA COLUNA
+                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
             """)
             
-            # Tabela de Despesas
+            # Tenta adicionar a coluna is_archived se não existir
+            try:
+                cur.execute("ALTER TABLE appointments ADD COLUMN is_archived BOOLEAN NOT NULL DEFAULT FALSE;")
+                print("Coluna 'is_archived' adicionada à tabela appointments (se não existisse).")
+            except psycopg2.errors.DuplicateColumn:
+                pass # Coluna já existe, ignora o erro
+
+            # Tabela de Despesas Mensais
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS expenses (
+                CREATE TABLE IF NOT EXISTS monthly_expenses (
                     id SERIAL PRIMARY KEY,
                     description VARCHAR(255) NOT NULL,
-                    amount DECIMAL(10, 2) NOT NULL,
-                    expense_date DATE NOT NULL
+                    amount NUMERIC(10, 2) NOT NULL,
+                    expense_date DATE NOT NULL DEFAULT CURRENT_DATE
                 );
             """)
-            
-            conn.commit()
+
+            # Adicionar serviços mock se a tabela estiver vazia
+            cur.execute("SELECT COUNT(*) FROM services;")
+            if cur.fetchone()[0] == 0:
+                cur.execute("INSERT INTO services (name, price, duration) VALUES ('Corte Simples', 35.00, 45);")
+                cur.execute("INSERT INTO services (name, price, duration) VALUES ('Design de Barba', 25.00, 30);")
+                cur.execute("INSERT INTO services (name, price, duration) VALUES ('Corte + Barba', 55.00, 75);")
+                print("Serviços mock inseridos.")
+
+            # Adicionar despesas mock se a tabela estiver vazia
+            cur.execute("SELECT COUNT(*) FROM monthly_expenses;")
+            if cur.fetchone()[0] == 0:
+                cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Aluguel (Mock)', 1200.00);")
+                cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Energia (Mock)', 200.00);")
+                print("Despesas mock inseridas.")
+
+        conn.commit()
     except Exception as e:
-        print(f"Erro ao configurar o esquema do banco de dados: {e}")
+        print(f"Erro ao inicializar o banco de dados: {e}")
         conn.rollback()
     finally:
         conn.close()
 
+# Inicializa o banco de dados assim que o script é executado
+initialize_db()
+
+# --- 2. APLICAÇÃO FLASK E ROTAS API ---
+
+app = Flask(__name__)
+app.secret_key = FLASK_SECRET_KEY
+
+def get_role():
+    """Obtém a função do usuário da sessão Flask."""
+    return session.get('role', 'none')
+
+# --- Rotas de Autenticação e Configuração (Mantidas) ---
+
+@app.route('/', methods=['GET'])
+def index():
+    """Serve o arquivo HTML com o frontend."""
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    """Simula o login de cliente/admin."""
+    data = request.get_json()
+    role = data.get('role')
+    admin_key = data.get('adminKey')
+
+    if role == 'admin' and admin_key == ADMIN_KEY:
+        session['role'] = 'admin'
+        return jsonify({'message': 'Login Admin bem-sucedido', 'role': 'admin'}), 200
+    elif role == 'client':
+        session['role'] = 'client'
+        return jsonify({'message': 'Login Cliente bem-sucedido', 'role': 'client'}), 200
+    
+    session['role'] = 'none'
+    return jsonify({'message': 'Chave de acesso incorreta ou função inválida'}), 401
+
+@app.route('/api/logout', methods=['POST'])
+def logout():
+    """Faz o logout do usuário."""
+    session.pop('role', None)
+    return jsonify({'message': 'Logout bem-sucedido'}), 200
+
+# --- Rotas de Serviços (Mantidas) ---
+
+@app.route('/api/services', methods=['GET', 'POST', 'PUT', 'DELETE'])
+def manage_services():
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({'message': 'Erro de conexão com o banco de dados'}), 500
+
+    role = get_role()
+    
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if request.method == 'GET':
+                cur.execute("SELECT id, name, price, duration FROM services ORDER BY name;")
+                services = cur.fetchall()
+                return jsonify(services)
+
+            if role != 'admin':
+                return jsonify({'message': 'Acesso negado. Apenas Barbeiros (Admin) podem gerenciar serviços.'}), 403
+
+            if request.method == 'POST':
+                # POST é usado para criação (sem 'id') ou edição (com 'id')
+                data = request.get_json()
+                service_id = data.get('id')
+                name = data.get('name')
+                price = data.get('price')
+                duration = data.get('duration')
+                
+                if service_id:
+                    # Edição (PUT lógico)
+                    cur.execute("UPDATE services SET name = %s, price = %s, duration = %s WHERE id = %s RETURNING id;",
+                                (name, price, duration, service_id))
+                    conn.commit()
+                    return jsonify({'message': f'Serviço ID {service_id} atualizado com sucesso.'})
+                else:
+                    # Criação (POST)
+                    cur.execute("INSERT INTO services (name, price, duration) VALUES (%s, %s, %s) RETURNING id;",
+                                (name, price, duration))
+                    new_id = cur.fetchone()['id']
+                    conn.commit()
+                    return jsonify({'message': f'Serviço "{name}" adicionado com ID {new_id}.'}), 201
+
+            elif request.method == 'DELETE':
+                data = request.get_json()
+                service_id = data.get('id')
+                cur.execute("DELETE FROM services WHERE id = %s RETURNING id;", (service_id,))
+                if cur.fetchone():
+                    conn.commit()
+                    return jsonify({'message': f'Serviço ID {service_id} excluído com sucesso.'})
+                return jsonify({'message': 'Serviço não encontrado.'}), 404
+
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro na gestão de serviços: {e}")
+        return jsonify({'message': f'Erro interno: {e}'}), 500
+    finally:
+        conn.close()
+
+# --- Rotas de Agendamentos (Atualizadas) ---
+
+@app.route('/api/appointments', methods=['GET', 'POST'])
+def manage_appointments():
+    """GET: Lista agendamentos ATIVOS. POST: Cria novo agendamento."""
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({'message': 'Erro de conexão com o banco de dados'}), 500
+
+    role = get_role()
+
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if request.method == 'GET':
+                if role != 'admin':
+                    return jsonify({'message': 'Acesso negado. Apenas Barbeiros (Admin) podem ver agendamentos.'}), 403
+                
+                # RETORNA APENAS AGENDAMENTOS NÃO ARQUIVADOS (is_archived = FALSE)
+                cur.execute("SELECT id, barber_id, service_name, appointment_date, appointment_time, client_name, service_price, status FROM appointments WHERE is_archived = FALSE ORDER BY appointment_date, appointment_time ASC;")
+                appointments = cur.fetchall()
+                for appt in appointments:
+                    appt['appointment_date'] = appt['appointment_date'].strftime('%d-%m-%Y')
+                return jsonify(appointments)
+
+            elif request.method == 'POST':
+                data = request.get_json()
+                barber_id = data.get('barberId')
+                service_name = data.get('serviceName')
+                appointment_date = data.get('date')
+                appointment_time = data.get('time')
+                client_name = data.get('clientName')
+                client_phone = data.get('clientPhone')
+                client_email = data.get('clientEmail')
+                service_price = data.get('servicePrice')
+                
+                cur.execute("""
+                    INSERT INTO appointments (barber_id, service_name, appointment_date, appointment_time, client_name, client_phone, client_email, service_price)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;
+                """, (barber_id, service_name, appointment_date, appointment_time, client_name, client_phone, client_email, service_price))
+                
+                new_id = cur.fetchone()['id']
+                conn.commit()
+                return jsonify({'message': f'Agendamento submetido com ID {new_id}.', 'id': new_id}), 201
+
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro na gestão de agendamentos: {e}")
+        return jsonify({'message': f'Erro interno: {e}'}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/appointments/<int:id>/status', methods=['PUT'])
+def update_appointment_status(id):
+    """Atualiza o status (Concluído/Cancelado/Agendado) de um agendamento."""
+    if get_role() != 'admin':
+        return jsonify({'message': 'Acesso negado. Apenas Barbeiros (Admin) podem atualizar status.'}), 403
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({'message': 'Erro de conexão com o banco de dados'}), 500
+
+    try:
+        data = request.get_json()
+        new_status = data.get('status')
+
+        with conn.cursor() as cur:
+            cur.execute("UPDATE appointments SET status = %s WHERE id = %s RETURNING id;", (new_status, id))
+            if cur.fetchone():
+                conn.commit()
+                return jsonify({'message': f'Status do Agendamento {id} atualizado para {new_status}.'})
+            return jsonify({'message': 'Agendamento não encontrado.'}), 404
+            
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro ao atualizar status: {e}")
+        return jsonify({'message': f'Erro interno: {e}'}), 500
+    finally:
+        conn.close()
+
+# --- NOVA ROTA: LISTA DE AGENDAMENTOS ARQUIVADOS ---
+
+@app.route('/api/appointments/archived', methods=['GET'])
+def get_archived_appointments():
+    """Retorna a lista de agendamentos ARQUIVADOS (is_archived = TRUE)."""
+    if get_role() != 'admin':
+        return jsonify({'message': 'Acesso negado.'}), 403
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({'message': 'Erro de conexão com o banco de dados'}), 500
+
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Apenas agendamentos ARQUIVADOS
+            cur.execute("SELECT id, barber_id, service_name, appointment_date, appointment_time, client_name, service_price, status FROM appointments WHERE is_archived = TRUE ORDER BY appointment_date DESC, appointment_time DESC;")
+            appointments = cur.fetchall()
+            for appt in appointments:
+                appt['appointment_date'] = appt['appointment_date'].strftime('%Y-%m-%d')
+            return jsonify(appointments)
+
+    except Exception as e:
+        print(f"Erro ao obter agendamentos arquivados: {e}")
+        return jsonify({'message': f'Erro interno: {e}'}), 500
+    finally:
+        conn.close()
+
+
+# --- NOVA ROTA: ARQUIVAR/DESARQUIVAR AGENDAMENTO ---
+
+@app.route('/api/appointments/<int:id>/archive', methods=['PUT'])
+def archive_appointment(id):
+    """Arquiva ou desarquiva (toggle) um agendamento."""
+    if get_role() != 'admin':
+        return jsonify({'message': 'Acesso negado.'}), 403
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({'message': 'Erro de conexão com o banco de dados'}), 500
+
+    try:
+        data = request.get_json()
+        # O padrão é arquivar (True) se não for especificado
+        is_archived = data.get('isArchived', True) 
+
+        with conn.cursor() as cur:
+            cur.execute("UPDATE appointments SET is_archived = %s WHERE id = %s RETURNING id;", (is_archived, id))
+            if cur.fetchone():
+                conn.commit()
+                action = 'Arquivado' if is_archived else 'Desarquivado'
+                return jsonify({'message': f'Agendamento {id} {action} com sucesso.'})
+            return jsonify({'message': 'Agendamento não encontrado.'}), 404
+            
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro ao arquivar/desarquivar agendamento: {e}")
+        return jsonify({'message': f'Erro interno: {e}'}), 500
+    finally:
+        conn.close()
+
+# --- Rotas de Despesas (Mantidas) ---
+
+@app.route('/api/expenses', methods=['GET', 'POST'])
+def manage_expenses():
+    """Gerencia a listagem e adição de despesas mensais."""
+    if get_role() != 'admin':
+        return jsonify({'message': 'Acesso negado. Apenas Barbeiros (Admin) podem gerenciar despesas.'}), 403
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({'message': 'Erro de conexão com o banco de dados'}), 500
+
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if request.method == 'GET':
+                # Pega despesas do mês atual
+                cur.execute("""
+                    SELECT id, description, amount, expense_date 
+                    FROM monthly_expenses
+                    WHERE EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE)
+                    AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)
+                    ORDER BY expense_date DESC;
+                """)
+                expenses = cur.fetchall()
+                for exp in expenses:
+                    exp['expense_date'] = exp['expense_date'].strftime('%d-%m-%Y')
+                    exp['amount'] = float(exp['amount'])
+                return jsonify(expenses)
+
+            elif request.method == 'POST':
+                data = request.get_json()
+                description = data.get('description')
+                amount = data.get('amount')
+                expense_date = data.get('date', datetime.now().strftime('%d-%m-%Y'))
+                
+                cur.execute("""
+                    INSERT INTO monthly_expenses (description, amount, expense_date)
+                    VALUES (%s, %s, %s) RETURNING id;
+                """, (description, amount, expense_date))
+                
+                new_id = cur.fetchone()['id']
+                conn.commit()
+                return jsonify({'message': f'Despesa "{description}" adicionada com ID {new_id}.'}), 201
+
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro na gestão de despesas: {e}")
+        return jsonify({'message': f'Erro interno: {e}'}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/expenses/<int:id>', methods=['DELETE'])
+def delete_expense(id):
+    """Exclui uma despesa pelo ID."""
+    if get_role() != 'admin':
+        return jsonify({'message': 'Acesso negado.'}), 403
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({'message': 'Erro de conexão com o banco de dados'}), 500
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM monthly_expenses WHERE id = %s RETURNING id;", (id,))
+            if cur.fetchone():
+                conn.commit()
+                return jsonify({'message': f'Despesa ID {id} excluída com sucesso.'})
+            return jsonify({'message': 'Despesa não encontrada.'}), 404
+            
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro ao excluir despesa: {e}")
+        return jsonify({'message': f'Erro interno: {e}'}), 500
+    finally:
+        conn.close()
+
+
+# --- ROTA DO DASHBOARD (Mantida) ---
+
+@app.route('/api/dashboard', methods=['GET'])
+def get_dashboard_data():
+    """Calcula e retorna dados do dashboard, incluindo dados diários para o gráfico."""
+    if get_role() != 'admin':
+        return jsonify({'message': 'Acesso negado.'}), 403
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({'message': 'Erro de conexão com o banco de dados'}), 500
+
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Data Inicial do Mês
+            first_day_of_month = date.today().replace(day=1).strftime('%Y-%m-%d')
+            
+            # 1. Receita Total e Agendamentos Concluídos do Mês (Apenas Agendamentos NÃO ARQUIVADOS)
+            cur.execute("""
+                SELECT SUM(service_price) as total_revenue, COUNT(*) as completed_count
+                FROM appointments
+                WHERE status = 'Concluído' 
+                AND is_archived = FALSE -- APENAS NÃO ARQUIVADOS
+                AND appointment_date >= %s;
+            """, (first_day_of_month,))
+            
+            revenue_result = cur.fetchone()
+            total_revenue = float(revenue_result['total_revenue'] or 0.0)
+            completed_count = revenue_result['completed_count'] or 0
+
+            # 2. Despesas Totais do Mês
+            cur.execute("""
+                SELECT SUM(amount) as total_expenses
+                FROM monthly_expenses
+                WHERE expense_date >= %s;
+            """, (first_day_of_month,))
+            
+            expense_result = cur.fetchone()
+            total_expenses = float(expense_result['total_expenses'] or 0.0)
+
+            net_income = total_revenue - total_expenses
+            
+            # 3. Dados Diários para o Gráfico (últimos 30 dias de agendamentos CONCLUÍDOS e NÃO ARQUIVADOS)
+            cur.execute("""
+                SELECT 
+                    appointment_date,
+                    SUM(service_price) as daily_revenue,
+                    COUNT(*) as daily_appointments
+                FROM appointments
+                WHERE status = 'Concluído' 
+                AND is_archived = FALSE -- APENAS NÃO ARQUIVADOS
+                AND appointment_date >= (CURRENT_DATE - INTERVAL '30 days')
+                GROUP BY appointment_date
+                ORDER BY appointment_date;
+            """)
+            daily_data_raw = cur.fetchall()
+            
+            daily_data = []
+            for row in daily_data_raw:
+                date_str = row['appointment_date'].strftime('%Y-%m-%d')
+                daily_data.append({
+                    'date': date_str,
+                    'revenue': float(row['daily_revenue'] or 0.0),
+                    'appointments': row['daily_appointments'] or 0
+                })
+
+            return jsonify({
+                'totalRevenue': total_revenue,
+                'completedAppointments': completed_count,
+                'totalExpenses': total_expenses,
+                'netIncome': net_income,
+                'dailyData': daily_data 
+            })
+
+    except Exception as e:
+        print(f"Erro ao obter dados do dashboard: {e}")
+        return jsonify({'message': f'Erro interno: {e}'}), 500
+    finally:
+        conn.close()
+
+
+# --- 3. CONTEÚDO HTML E JAVASCRIPT (ATUALIZADO) ---
+
+# O frontend é injetado como um template de string em Flask.
+HTML_TEMPLATE = f"""
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BarberFlow - Agendamento e Gestão (Python/Postgres)</title>
+    <!-- Carrega Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Carrega Chart.js para gráficos dinâmicos -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    
+    <!-- Configuração de Fonte Inter -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {{
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            background-image: url('https://raw.githubusercontent.com/Rainando025/barberflow/refs/heads/main/barbearia5.jpg');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+            color: #eee;
+        }}
+        #loading-overlay {{
+            z-index: 50;
+        }}
+        .chart-container {{
+            position: relative;
+            height: 400px;
+            width: 100%;
+        }}
+    </style>
+</head>
+<body class="min-h-screen antialiased">
+
+    <!-- Navbar simples (visível após o login/seleção de função) -->
+    <header id="app-header" class="bg-gray-900 shadow-md hidden">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <h1 class="text-3xl font-extrabold text-white tracking-tight">Barber<span class="text-red-500">Flow</span></h1>
+            
+            <!-- Seletor de Modo (Switch de Agendamento para Admin) -->
+            <div id="view-switch-container" class="flex items-center space-x-4">
+                <button id="switch-schedule" onclick="changeView('schedule')" class="px-4 py-2 text-sm font-medium rounded-full transition-colors duration-200" style="background-color: #dc2626; color: white;">
+                    Agendamento Cliente
+                </button>
+                <button id="switch-admin" onclick="changeView('admin')" class="px-4 py-2 text-sm font-medium rounded-full text-white bg-gray-700 hover:bg-gray-800 transition-colors duration-200">
+                    Área Barbeiro
+                </button>
+            </div>
+            <button onclick="logout()" class="px-3 py-1 text-sm font-medium rounded-full text-red-400 border border-red-400 hover:bg-red-400 hover:text-white transition-colors duration-200">Sair</button>
+        </div>
+    </header>
+
+    <!-- Container Principal do App -->
+    <main class="py-10">
+        <div id="app-container" class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+            
+            <!-- 0. TELA DE LOGIN (tema barbearia) -->
+            <div id="login-view" class="flex justify-center items-center h-[100vh]">
+              <div class="w-full max-w-md p-8 rounded-2xl shadow-2xl border-2 border-yellow-500 bg-gradient-to-b from-gray-900 to-black">
+                
+                <!-- LOGO / TÍTULO -->
+                <div class="flex flex-col items-center space-y-4 mb-6">
+                  <!-- LOGO opcional -->
+                  <div class="bg-black border-2 border-yellow-500 rounded-full p-2">
+                    <img src="https://raw.githubusercontent.com/Rainando025/barberflow/refs/heads/main/logo.png" alt="Logo BarberFlow" onerror="this.style.display='none'"
+                         class="w-24 h-24 rounded-full object-cover shadow-lg">
+                  </div>
+                  <h2 class="text-3xl font-extrabold text-yellow-400 tracking-wide text-center">
+                    Barber<span class="text-white">Flow</span>
+                  </h2>
+                  <p class="text-sm text-gray-300 text-center">Escolha sua forma de acesso para continuar</p>
+                </div>
+    
+                <!-- BOTÃO CLIENTE -->
+                <button onclick="handleRoleSelection('client')" 
+                  class="w-full mb-4 py-3 px-4 rounded-lg shadow-md text-base font-semibold bg-yellow-500 text-black hover:bg-yellow-400 transition-all duration-200 transform hover:scale-[1.03]">
+                  💈 Agendar um Serviço (Cliente)
+                </button>
+    
+                <!-- DIVISOR -->
+                <div class="relative flex py-5 items-center">
+                  <div class="flex-grow border-t border-gray-700"></div>
+                  <span class="flex-shrink mx-4 text-gray-400 text-sm">OU</span>
+                  <div class="flex-grow border-t border-gray-700"></div>
+                </div>
+    
+                <!-- FORM ADMIN -->
+                <form onsubmit="handleAdminLogin(event)" class="space-y-4">
+                  <input type="password" id="admin-key" placeholder="Chave de Acesso do Barbeiro" required 
+                         class="w-full py-3 px-4 border border-gray-700 rounded-lg shadow-sm bg-transparent text-white placeholder-gray-400 focus:ring-yellow-500 focus:border-yellow-500 focus:outline-none">
+                  
+                  <button type="submit" 
+                    class="w-full py-3 px-4 rounded-lg shadow-md text-base font-semibold text-white bg-gray-900 border border-yellow-500 hover:bg-black transition-all duration-200 transform hover:scale-[1.03]">
+                    🔑 Entrar como Barbeiro (Admin)
+                  </button>
+    
+                  <p id="login-message" class="text-center text-sm text-red-400 font-semibold mt-2"></p>
+                </form>
+    
+                <!-- RODAPÉ -->
+                <p class="mt-8 text-center text-xs text-gray-400">
+                  Autêntica Barbershop © 2025 — <span class="text-yellow-500">Autencidade em cada corte</span>
+                </p>
+              </div>
+            </div>
+
+                <!-- 1. VISTA DO CLIENTE (AGENDAMENTO) -->
+                <div id="schedule-view" class="hidden bg-black p-6 md:p-10 rounded-xl shadow-2xl border-t-4 border-red-600">
+                    <h2 class="text-3xl font-bold text-white mb-6 border-b pb-2">Agendamento Online</h2>
+                    <form id="appointment-form" onsubmit="handleAppointmentSubmit(event)" class="space-y-6">
+                        
+                        <!-- Passo 1: Barbeiro e Serviço -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label for="barber" class="block text-sm font-medium text-yellow-500">Escolha o Barbeiro</label>
+                                <select id="barber" required class="mt-1 block w-full pl-3 pr-10 py-3 text-black border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
+                                    <option value="">-- Selecione o Profissional --</option>
+                                    <option value="barber1">João (Especialista em Fade)</option>
+                                    <option value="barber2">Pedro (Especialista em Clássico)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="service" class="block text-sm font-medium text-yellow-500">Escolha o Corte/Serviço</label>
+                                <select id="service" required class="mt-1 block w-full pl-3 pr-10 py-3 text-black border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
+                                    <option value="">-- Carregando Serviços... --</option>
+                                </select>
+                            </div>
+                        </div>
+    
+                        <!-- Passo 2: Data e Hora (Horário dinâmico) -->
+                        <div>
+                            <h3 class="text-lg font-semibold text-white mb-3 mt-4">Data e Horário Disponível</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <label for="date" class="block text-sm font-medium text-yellow-500">Data Desejada</label>
+                                    <input type="date" id="date" required class="mt-1 block w-full py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                </div>
+                                <div>
+                                    <label for="time" class="block text-sm font-medium text-yellow-500">Horários Disponíveis</label>
+                                    <select id="time" required class="mt-1 block w-full pl-3 pr-10 py-3 text-black border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500 sm:text-sm">
+                                        <option value="">-- Selecione um Barbeiro e Data --</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+    
+                        <!-- Passo 3: Dados do Cliente -->
+                        <div>
+                            <h3 class="text-lg font-semibold text-white mb-3 mt-4">Seus Dados</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <input type="text" id="client-name" placeholder="Seu Nome Completo" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                <input type="tel" id="client-phone" placeholder="Seu Telefone (Whatsapp)" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                <input type="email" id="client-email" placeholder="Seu Email (Opcional)" class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                            </div>
+                        </div>
+    
+                        <!-- Botão de Agendar -->
+                        <button type="submit" id="submit-button" class="w-full mt-8 py-3 px-4 border border-transparent rounded-lg shadow-md text-base font-medium text-white bg-orange-600 hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all duration-200 transform hover:scale-[1.01]">
+                            Confirmar Agendamento
+                        </button>
+                    </form>
+                </div>
+
+
+            <!-- 2. VISTA DO BARBEIRO (ADMIN) -->
+            <div id="admin-view" class="hidden bg-black p-6 md:p-10 rounded-xl shadow-2xl border-t-4 border-red-600">
+                <h2 class="text-3xl font-bold text-yellow-800 mb-6">Painel do Barbeiro</h2>
+                <p id="admin-role-warning" class="bg-red-100 border-l-4 border-red-500 text-orange-700 p-3 mb-4 hidden" role="alert">
+                    <span class="font-bold">Atenção:</span> Você não possui permissão de Barbeiro (Admin) para acessar esta aba.
+                </p>
+
+                <!-- Tabs de Navegação -->
+                <div class="border-b border-gray-200">
+                    <nav class="-mb-px flex space-x-8" aria-label="Tabs">
+                        <button onclick="changeAdminTab('appointments')" id="tab-appointments" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-red-500 text-red-600">
+                            Agendamentos Ativos
+                        </button>
+                        <button onclick="changeAdminTab('archived')" id="tab-archived" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white">
+                            Agendamentos Arquivados
+                        </button>
+                        <button onclick="changeAdminTab('services')" id="tab-services" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white">
+                            Serviços e Preços
+                        </button>
+                        <button onclick="changeAdminTab('expenses')" id="tab-expenses" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white">
+                            Despesas
+                        </button>
+                        <button onclick="changeAdminTab('dashboard')" id="tab-dashboard" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white">
+                            Dashboard e Caixa
+                        </button>
+                    </nav>
+                </div>
+
+                <!-- Conteúdo das Tabs -->
+                <div class="mt-6 space-y-8">
+                    
+                    <!-- 2.1. Agendamentos Ativos (NÃO ARQUIVADOS) -->
+                    <div id="appointments-tab" class="tab-content">
+                        <h3 class="text-xl font-semibold text-white mb-4">Próximos Agendamentos (Ativos)</h3>
+                        <p class="text-sm text-orange-500 mb-4">Apenas agendamentos Ativos (não arquivados) são exibidos aqui. Arquive os agendamentos antigos/finalizados.</p>
+                        <div class="bg-gray-50 p-4 rounded-lg shadow-inner">
+                            <p class="text-sm text-gray-600 mb-4">Atualize o status para calcular o Fluxo de Caixa.</p>
+                            <div id="appointments-list" class="space-y-4">
+                                <p class="text-center text-gray-500">Carregando agendamentos...</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 2.1.b. Agendamentos Arquivados (NOVA TAB) -->
+                    <div id="archived-tab" class="tab-content hidden">
+                        <h3 class="text-xl font-semibold text-white mb-4">Agendamentos Arquivados</h3>
+                        <p class="text-sm text-orange-500 mb-4">Histórico de agendamentos arquivados. Eles não afetam o dashboard principal, mas podem ser desarquivados.</p>
+                        <div class="bg-gray-50 p-4 rounded-lg shadow-inner">
+                            <div id="archived-appointments-list" class="space-y-4">
+                                <p class="text-center text-gray-500">Carregando agendamentos arquivados...</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 2.2. Gerenciamento de Serviços e Preços (Mantida) -->
+                    <div id="services-tab" class="tab-content hidden">
+                        <h3 class="text-xl font-semibold text-white mb-4">Gerenciar Serviços</h3>
+                        
+                        <!-- Formulário de Edição/Adição de Serviço -->
+                        <form id="service-form" onsubmit="handleServiceSubmit(event)" class="bg-gray-50 p-6 rounded-lg shadow mb-6 space-y-4">
+                            <h4 class="text-lg font-medium text-gray-700">Adicionar/Editar Serviço</h4>
+                            <input type="hidden" id="service-doc-id">
+                            <input type="text" id="service-name" placeholder="Nome do Corte/Serviço (Ex: Fade, Barba)" required class="w-full py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                            <div class="grid grid-cols-2 gap-4">
+                                <input type="number" id="service-price" placeholder="Preço (R$)" required min="0" step="0.01" class="py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                <input type="number" id="service-duration" placeholder="Duração (minutos)" required min="10" class="py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                            </div>
+                            <button type="submit" class="w-full py-2 px-4 rounded-lg text-white bg-orange-600 hover:bg-orange-700 transition-colors duration-200">
+                                <span id="service-button-text">Salvar Novo Serviço</span>
+                            </button>
+                            <button type="button" onclick="clearServiceForm()" id="cancel-service-button" class="w-full py-2 px-4 rounded-lg text-gray-700 bg-gray-200 hover:bg-gray-300 transition-colors duration-200 hidden">
+                                Cancelar Edição
+                            </button>
+                        </form>
+
+                        <!-- Lista de Serviços Atuais -->
+                        <ul id="current-services-list" class="space-y-2">
+                            <li class="text-center text-black p-4">Carregando lista de serviços...</li>
+                        </ul>
+                    </div>
+
+                    <!-- 2.3. Gerenciamento de Despesas (Mantida) -->
+                    <div id="expenses-tab" class="tab-content hidden">
+                        <h3 class="text-xl font-semibold text-white mb-4">Gerenciar Despesas do Mês</h3>
+                        
+                        <!-- Formulário de Adição de Despesa -->
+                        <form id="expense-form" onsubmit="handleExpenseSubmit(event)" class="bg-gray-50 p-6 rounded-lg shadow mb-6 space-y-4">
+                            <h4 class="text-lg font-medium text-gray-700">Adicionar Nova Despesa</h4>
+                            <input type="text" id="expense-description" placeholder="Descrição (Ex: Aluguel, Compra de Shampo)" required class="w-full py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                            <div class="grid grid-cols-2 gap-4">
+                                <input type="number" id="expense-amount" placeholder="Valor (R$)" required min="0" step="0.01" class="py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                <input type="date" id="expense-date" required class="py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                            </div>
+                            <button type="submit" class="w-full py-2 px-4 rounded-lg text-white bg-red-600 hover:bg-red-700 transition-colors duration-200">
+                                Adicionar Despesa
+                            </button>
+                        </form>
+
+                        <!-- Lista de Despesas Atuais -->
+                        <div class="overflow-x-auto shadow rounded-lg">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-100">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Descrição</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Valor (R$)</th>
+                                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="current-expenses-list" class="bg-white divide-y divide-gray-200">
+                                    <tr><td colspan="4" class="text-center text-gray-500 p-4">Carregando despesas...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+
+                    <!-- 2.4. Dashboard e Fluxo de Caixa (Mantida) -->
+                    <div id="dashboard-tab" class="tab-content hidden">
+                        <h3 class="text-xl font-semibold text-white mb-4">Dashboard Financeiro (Mês Atual)</h3>
+                        
+                        <div class="grid grid-cols-1 sm:grid-cols-4 gap-6">
+                            
+                            <!-- Card 1: Total Recebido -->
+                            <div class="bg-green-50 p-6 rounded-xl shadow-lg border-l-4 border-green-600">
+                                <p class="text-sm font-medium text-green-700">Receita de Serviços</p>
+                                <p id="total-revenue" class="mt-1 text-3xl font-bold text-green-800">R$ 0,00</p>
+                                <p class="text-xs text-gray-500 mt-2">Agendamentos CONCLUÍDOS este mês.</p>
+                            </div>
+
+                            <!-- Card 2: Agendamentos Concluídos -->
+                            <div class="bg-blue-50 p-6 rounded-xl shadow-lg border-l-4 border-blue-600">
+                                <p class="text-sm font-medium text-blue-700">Total de Concluídos</p>
+                                <p id="total-appointments" class="mt-1 text-3xl font-bold text-blue-800">0</p>
+                                <p class="text-xs text-gray-500 mt-2">Agendamentos finalizados (pagos) no mês.</p>
+                            </div>
+
+                            <!-- Card 3: Despesas Mensais -->
+                            <div class="bg-red-50 p-6 rounded-xl shadow-lg border-l-4 border-red-600">
+                                <p class="text-sm font-medium text-red-700">Despesas Totais (Mês)</p>
+                                <p id="total-expenses" class="mt-1 text-3xl font-bold text-red-800">R$ 0,00</p>
+                                <p class="text-xs text-gray-500 mt-2">Soma das despesas cadastradas.</p>
+                            </div>
+
+                            <!-- Card 4: Lucro Líquido (Calculado) -->
+                            <div id="net-income-card" class="bg-purple-50 p-6 rounded-xl shadow-lg border-l-4 border-purple-600">
+                                <p class="text-sm font-medium text-purple-700">Lucro Líquido</p>
+                                <p id="net-income" class="mt-1 text-3xl font-bold text-purple-800">R$ 0,00</p>
+                                <p class="text-xs text-gray-500 mt-2">Receita total - Despesas totais (mês).</p>
+                            </div>
+                        </div>
+
+                        <!-- Gráfico Dinâmico de Fluxo -->
+                        <div class="mt-8 bg-white p-6 rounded-xl shadow-md">
+                            <h4 class="text-lg font-medium text-gray-700 mb-4">Receita e Agendamentos (Últimos 30 Dias)</h4>
+                            <div class="chart-container">
+                                <canvas id="revenueChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Modal de Mensagem (Substitui alert()) -->
+    <div id="message-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 hidden flex items-center justify-center p-4 transition-opacity duration-300" aria-modal="true" role="dialog">
+        <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm transform transition-all">
+            <h3 id="modal-title" class="text-xl font-bold text-gray-900 mb-3">Sucesso!</h3>
+            <p id="modal-body" class="text-gray-600 mb-5">Mensagem aqui.</p>
+            <div class="flex justify-end">
+                <button onclick="closeModal()" class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 transition-colors duration-200">
+                    Fechar
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center hidden">
+        <div class="flex items-center space-x-2 text-white">
+            <svg class="animate-spin h-5 w-5 text-red-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span>Processando...</span>
+        </div>
+    </div>
+
+
+    <script>
+        // Variável global para rastrear a função do usuário
+        let userRole = 'none'; 
+        const ADMIN_KEY = '{ADMIN_KEY}'; // Injetado do Python
+        let revenueChartInstance = null; // Instância global do Chart.js
+
+        // --- Funções de UI e Navegação ---
+        let currentView = 'schedule';
+        let currentAdminTab = 'appointments';
+
+        function showLoading(show) {{
+            document.getElementById('loading-overlay').classList.toggle('hidden', !show);
+        }}
+
+        function openModal(title, message, isSuccess = true) {{
+            const modal = document.getElementById('message-modal');
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-body').textContent = message;
+            
+            const titleElement = document.getElementById('modal-title');
+            if (isSuccess) {{
+                titleElement.classList.remove('text-red-700', 'text-green-700');
+                titleElement.classList.add('text-green-700');
+            }} else {{
+                titleElement.classList.remove('text-green-700', 'text-red-700');
+                titleElement.classList.add('text-red-700');
+            }}
+            modal.classList.remove('hidden');
+        }}
+
+        function closeModal() {{
+            document.getElementById('message-modal').classList.add('hidden');
+        }}
+        
+        // --- Lógica de Login e Permissões (Mantida) ---
+
+        async function handleRoleSelection(role) {{
+            showLoading(true);
+            const response = await fetch('/api/login', {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{ role: role }})
+            }});
+            showLoading(false);
+
+            if (response.ok) {{
+                userRole = role;
+                document.getElementById('login-view').classList.add('hidden');
+                document.getElementById('app-header').classList.remove('hidden');
+                
+                if (userRole === 'client') {{
+                    document.getElementById('view-switch-container').classList.add('hidden');
+                    changeView('schedule');
+                    loadClientServices();
+                }}
+            }} else {{
+                 openModal('Erro de Login', 'Não foi possível iniciar a sessão como cliente.', false);
+            }}
+        }}
+
+        async function handleAdminLogin(event) {{
+            event.preventDefault();
+            const adminKey = document.getElementById('admin-key').value;
+            const messageEl = document.getElementById('login-message');
+            messageEl.textContent = '';
+            
+            showLoading(true);
+            const response = await fetch('/api/login', {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{ role: 'admin', adminKey: adminKey }})
+            }});
+            const data = await response.json();
+            showLoading(false);
+
+            if (response.ok) {{
+                userRole = 'admin';
+                document.getElementById('login-view').classList.add('hidden');
+                document.getElementById('app-header').classList.remove('hidden');
+                document.getElementById('view-switch-container').classList.remove('hidden');
+                changeView('admin');
+                loadAdminData();
+            }} else {{
+                messageEl.textContent = data.message || 'Chave de acesso incorreta.';
+                userRole = 'none';
+            }}
+        }}
+
+        async function logout() {{
+            await fetch('/api/logout', {{ method: 'POST' }});
+            userRole = 'none';
+            // Resetar UI
+            document.getElementById('app-header').classList.add('hidden');
+            document.getElementById('schedule-view').classList.add('hidden');
+            document.getElementById('admin-view').classList.add('hidden');
+            document.getElementById('login-view').classList.remove('hidden');
+            openModal('Sessão Encerrada', 'Você saiu da sua sessão. Selecione seu perfil para continuar.', true);
+        }}
+
+        function changeView(viewName) {{
+            if (viewName === 'admin' && userRole !== 'admin') {{
+                document.getElementById('admin-role-warning').classList.remove('hidden');
+                viewName = currentView === 'admin' ? 'schedule' : currentView;
+                if (viewName === 'schedule') {{
+                    document.getElementById('schedule-view').classList.remove('hidden');
+                    document.getElementById('admin-view').classList.add('hidden');
+                }}
+                return;
+            }}
+            
+            document.getElementById('admin-role-warning').classList.add('hidden');
+            currentView = viewName;
+
+            const scheduleView = document.getElementById('schedule-view');
+            const adminView = document.getElementById('admin-view');
+            const switchSchedule = document.getElementById('switch-schedule');
+            const switchAdmin = document.getElementById('switch-admin');
+
+            if (viewName === 'schedule') {{
+                scheduleView.classList.remove('hidden');
+                adminView.classList.add('hidden');
+                switchSchedule.style.backgroundColor = '#dc2626';
+                switchSchedule.style.color = 'white';
+                switchAdmin.style.backgroundColor = '#4b5563';
+                switchAdmin.style.color = 'white';
+                loadClientServices(); 
+            }} else {{ 
+                scheduleView.classList.add('hidden');
+                adminView.classList.remove('hidden');
+                switchSchedule.style.backgroundColor = '#4b5563';
+                switchSchedule.style.color = 'white';
+                switchAdmin.style.backgroundColor = '#dc2626';
+                switchAdmin.style.color = 'white';
+                loadAdminData(); 
+            }}
+        }}
+
+        function changeAdminTab(tabName) {{
+            currentAdminTab = tabName;
+
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            
+            document.querySelectorAll('.tab-button').forEach(btn => {{
+                btn.classList.remove('border-red-500', 'text-red-600');
+                btn.classList.add('border-transparent', 'text-gray-500', 'hover:border-gray-300', 'hover:text-gray-700');
+            }});
+
+            document.getElementById(`${{tabName}}-tab`).classList.remove('hidden');
+            
+            const selectedButton = document.getElementById(`tab-${{tabName}}`);
+            selectedButton.classList.remove('border-transparent', 'text-gray-500', 'hover:border-gray-300', 'hover:text-gray-700');
+            selectedButton.classList.add('border-red-500', 'text-red-600');
+            
+            // Carrega dados da aba selecionada
+            if (tabName === 'appointments') {{
+                loadAppointments();
+            }} else if (tabName === 'archived') {{
+                loadArchivedAppointments(); // NOVA CHAMADA
+            }} else if (tabName === 'services') {{
+                loadServicesList();
+            }} else if (tabName === 'expenses') {{
+                loadExpenses();
+            }} else if (tabName === 'dashboard') {{
+                loadCashFlow();
+            }}
+        }}
+
+
+        // ----------------------------------------------------------------------
+        // LÓGICA DO CLIENTE (AGENDAMENTO) - Comunicação com Flask API (Mantida)
+        // ----------------------------------------------------------------------
+
+        async function loadClientServices() {{
+            const serviceSelect = document.getElementById('service');
+            serviceSelect.innerHTML = '<option value="">-- Carregando Serviços... --</option>';
+
+            try {{
+                const response = await fetch('/api/services');
+                if (!response.ok) throw new Error('Falha ao buscar serviços.');
+                const services = await response.json();
+
+                serviceSelect.innerHTML = '<option value="">-- Selecione o Serviço --</option>';
+                services.forEach(service => {{
+                    const servicePrice = parseFloat(service.price);
+                    const formattedPrice = servicePrice.toFixed(2);
+                    
+                    const option = document.createElement('option');
+                    option.value = service.id;
+                    option.textContent = `${{service.name}} (R$ ${{formattedPrice.replace('.', ',')}} - ${{service.duration}} min)`;
+                    option.setAttribute('data-price', formattedPrice);
+                    option.setAttribute('data-name', service.name);
+                    serviceSelect.appendChild(option);
+                }});
+            }} catch (error) {{
+                console.error("Erro ao carregar serviços:", error);
+                serviceSelect.innerHTML = '<option value="">-- Erro ao carregar serviços --</option>';
+            }}
+        }}
+        
+        async function handleAppointmentSubmit(event) {{
+            event.preventDefault();
+            
+            const form = event.target;
+            const submitButton = document.getElementById('submit-button');
+            const serviceOption = form.service.options[form.service.selectedIndex];
+            
+            if (!serviceOption || !serviceOption.getAttribute('data-price')) {{
+                return openModal('Erro', 'Selecione um serviço válido.', false);
+            }}
+            
+            const servicePrice = parseFloat(serviceOption.getAttribute('data-price'));
+            const serviceName = serviceOption.getAttribute('data-name');
+
+            const appointmentData = {{
+                barberId: form.barber.value, 
+                serviceName: serviceName,
+                date: form.date.value,
+                time: form.time.value,
+                clientName: form['client-name'].value,
+                clientPhone: form['client-phone'].value,
+                clientEmail: form['client-email'].value,
+                servicePrice: servicePrice,
+            }};
+
+            showLoading(true);
+            submitButton.disabled = true;
+
+            try {{
+                const response = await fetch('/api/appointments', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify(appointmentData)
+                }});
+
+                const result = await response.json();
+
+                if (!response.ok) throw new Error(result.message || 'Erro ao agendar.');
+                
+                openModal('Agendamento Confirmado!', `Seu agendamento para ${{appointmentData.date}} às ${{appointmentData.time}} foi confirmado. Barbeiro: ${{form.barber.options[form.barber.selectedIndex].text.split('(')[0].trim()}}`, true);
+                form.reset();
+                
+            }} catch (error) {{
+                console.error("Erro ao submeter agendamento:", error);
+                openModal('Erro no Agendamento', `Não foi possível agendar. ${{error.message}}`, false);
+            }} finally {{
+                showLoading(false);
+                submitButton.disabled = false;
+            }}
+        }}
+
+
+        // ----------------------------------------------------------------------
+        // LÓGICA DO BARBEIRO (ADMIN)
+        // ----------------------------------------------------------------------
+        
+        function loadAdminData() {{
+            if (userRole !== 'admin') return; 
+            changeAdminTab('appointments');
+        }}
+
+        // Função Genérica para Renderizar Agendamentos (Usada para Ativos e Arquivados)
+        function renderAppointmentList(appointments, listElementId, isArchivedList = false) {{
+            const appointmentsListEl = document.getElementById(listElementId);
+            appointmentsListEl.innerHTML = '';
+
+            if (appointments.length === 0) {{
+                appointmentsListEl.innerHTML = `<p class="text-center text-gray-500 p-4">Nenhum agendamento ${{isArchivedList ? 'arquivado' : 'ativo'}} encontrado.</p>`;
+                return;
+            }}
+
+            appointments.forEach((appointment) => {{
+                const appointmentId = appointment.id;
+
+                let statusClass = '';
+                switch (appointment.status) {{
+                    case 'Concluído': statusClass = 'bg-green-100 text-green-800'; break;
+                    case 'Cancelado': statusClass = 'bg-red-100 text-red-800'; break;
+                    case 'Agendado': default: statusClass = 'bg-yellow-100 text-yellow-800'; break;
+                }}
+
+                const barberName = appointment.barber_id === 'barber1' ? 'João' : (appointment.barber_id === 'barber2' ? 'Pedro' : appointment.barber_id);
+                const formattedPrice = parseFloat(appointment.service_price).toFixed(2).replace('.', ',');
+                
+                let actionButton = '';
+                if (!isArchivedList) {{
+                    // Botão de Arquivar para lista ATIVA
+                    actionButton = `<button onclick="archiveAppointment(${{appointmentId}}, true)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-gray-500 hover:bg-gray-600 transition-colors duration-200">Arquivar</button>`;
+                }} else {{
+                    // Botão de Desarquivar para lista ARQUIVADA
+                    actionButton = `<button onclick="archiveAppointment(${{appointmentId}}, false)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200">Desarquivar</button>`;
+                }}
+                
+                const appointmentHtml = `
+                    <div id="appt-${{appointmentId}}" class="p-4 bg-white rounded-lg shadow flex flex-col sm:flex-row justify-between items-start sm:items-center transition-all duration-200 hover:shadow-md">
+                        <div class="mb-2 sm:mb-0">
+                            <p class="font-bold text-lg text-gray-800">${{appointment.appointment_time}} (${{appointment.appointment_date}})</p>
+                            <p class="text-sm text-gray-600">${{appointment.client_name}} - ${{appointment.service_name}} c/ ${{barberName}} (R$ ${{formattedPrice}})</p>
+                        </div>
+                        <div class="flex items-center space-x-2 mt-2 sm:mt-0">
+                            <span class="px-3 py-1 text-xs font-semibold rounded-full ${{statusClass}}">${{appointment.status}}</span>
+                            ${{isArchivedList ? '' : `
+                                <select onchange="updateAppointmentStatus(${{appointmentId}}, this.value)" class="py-1 px-2 border border-gray-300 rounded-lg text-sm focus:ring-red-500 focus:border-red-500">
+                                    <option value="Agendado" ${{appointment.status === 'Agendado' ? 'selected' : ''}}>Agendado</option>
+                                    <option value="Concluído" ${{appointment.status === 'Concluído' ? 'selected' : ''}}>Concluído</option>
+                                    <option value="Cancelado" ${{appointment.status === 'Cancelado' ? 'selected' : ''}}>Cancelado</option>
+                                </select>`
+                            }}
+                            ${{actionButton}}
+                        </div>
+                    </div>
+                `;
+                appointmentsListEl.insertAdjacentHTML('beforeend', appointmentHtml);
+            }});
+        }}
+
+        // Carrega Agendamentos ATIVOS
+        async function loadAppointments() {{
+            if (userRole !== 'admin') return; 
+
+            const appointmentsListEl = document.getElementById('appointments-list');
+            appointmentsListEl.innerHTML = '<p class="text-center text-gray-500">Carregando agendamentos ativos...</p>';
+            
+            try {{
+                const response = await fetch('/api/appointments');
+                if (!response.ok) throw new Error('Falha ao buscar agendamentos ativos.');
+                const appointments = await response.json();
+
+                renderAppointmentList(appointments, 'appointments-list', false);
+                loadCashFlow(); // Recarrega o dashboard
+            }} catch (error) {{
+                console.error("Erro ao carregar agendamentos ativos:", error);
+                openModal('Erro de Dados', error.message, false);
+                appointmentsListEl.innerHTML = '<p class="text-center text-red-500 p-4">Erro ao carregar agendamentos ativos.</p>';
+            }}
+        }}
+
+        // Carrega Agendamentos ARQUIVADOS (NOVA FUNÇÃO)
+        async function loadArchivedAppointments() {{
+            if (userRole !== 'admin') return; 
+
+            const archivedListEl = document.getElementById('archived-appointments-list');
+            archivedListEl.innerHTML = '<p class="text-center text-gray-500">Carregando agendamentos arquivados...</p>';
+            
+            try {{
+                const response = await fetch('/api/appointments/archived');
+                if (!response.ok) throw new Error('Falha ao buscar agendamentos arquivados.');
+                const appointments = await response.json();
+
+                renderAppointmentList(appointments, 'archived-appointments-list', true);
+            }} catch (error) {{
+                console.error("Erro ao carregar agendamentos arquivados:", error);
+                openModal('Erro de Dados', error.message, false);
+                archivedListEl.innerHTML = '<p class="text-center text-red-500 p-4">Erro ao carregar agendamentos arquivados.</p>';
+            }}
+        }}
+
+        // Arquiva/Desarquiva Agendamento (NOVA FUNÇÃO)
+        async function archiveAppointment(id, isArchiving) {{
+            if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem gerenciar o arquivamento.', false);
+            showLoading(true);
+            try {{
+                const response = await fetch(`/api/appointments/${{id}}/archive`, {{
+                    method: 'PUT',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ isArchived: isArchiving }})
+                }});
+
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.message || 'Erro ao arquivar/desarquivar.');
+
+                openModal('Sucesso', result.message, true);
+                
+                // Recarrega as listas relevantes
+                if (isArchiving) {{
+                    loadAppointments(); // Recarrega lista de ativos
+                }} else {{
+                    loadArchivedAppointments(); // Recarrega lista de arquivados
+                }}
+                loadCashFlow(); // Garante que o dashboard reflita as mudanças
+            }} catch (error) {{
+                console.error("Erro ao arquivar/desarquivar:", error);
+                openModal('Erro', `Não foi possível ${{isArchiving ? 'arquivar' : 'desarquivar'}}. ${{error.message}}`, false);
+            }} finally {{
+                showLoading(false);
+            }}
+        }}
+        
+        async function updateAppointmentStatus(id, newStatus) {{
+            if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem alterar o status de agendamentos.', false);
+            showLoading(true);
+            try {{
+                const response = await fetch(`/api/appointments/${{id}}/status`, {{
+                    method: 'PUT',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ status: newStatus }})
+                }});
+
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.message || 'Erro ao atualizar status.');
+
+                openModal('Status Atualizado', `Agendamento #${{id}} marcado como "${{newStatus}}".`, true);
+                loadAppointments(); 
+            }} catch (error) {{
+                console.error("Erro ao atualizar status:", error);
+                openModal('Erro', `Não foi possível atualizar o status. ${{error.message}}`, false);
+            }} finally {{
+                showLoading(false);
+            }}
+        }}
+
+        // --- Lógica do Dashboard (Mantida) ---
+        
+        let myChart;
+        
+        function renderChart(dailyData) {{
+            const canvas = document.getElementById('revenueChart');
+            
+            if (myChart) {{
+                myChart.destroy();
+            }}
+            
+            const labels = dailyData.map(d => {{
+                const parts = d.date.split('-');
+                return `${{parts[2]}}/${{parts[1]}}`; 
+            }});
+            const revenueData = dailyData.map(d => d.revenue);
+            const appointmentsData = dailyData.map(d => d.appointments);
+
+            myChart = new Chart(canvas, {{
+                type: 'bar',
+                data: {{
+                    labels: labels,
+                    datasets: [
+                        {{
+                            label: 'Receita (R$)',
+                            data: revenueData,
+                            backgroundColor: 'rgba(220, 38, 38, 0.7)',
+                            borderColor: 'rgba(220, 38, 38, 1)',
+                            yAxisID: 'yRevenue',
+                        }},
+                        {{
+                            label: 'Cortes Concluídos',
+                            data: appointmentsData,
+                            backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                            borderColor: 'rgba(59, 130, 246, 1)',
+                            type: 'line', 
+                            yAxisID: 'yAppointments',
+                            tension: 0.3
+                        }}
+                    ]
+                }},
+                options: {{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {{
+                        mode: 'index',
+                        intersect: false,
+                    }},
+                    scales: {{
+                        yRevenue: {{
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            title: {{ display: true, text: 'Receita (R$)' }},
+                            grid: {{ drawOnChartArea: false }},
+                            ticks: {{ callback: function(value) {{ return 'R$' + value.toFixed(2).replace('.', ','); }} }}
+                        }},
+                        yAppointments: {{
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            title: {{ display: true, text: 'Cortes Concluídos' }},
+                            grid: {{ drawOnChartArea: false }},
+                            ticks: {{ precision: 0 }}
+                        }}
+                    }}
+                }}
+            }});
+        }}
+
+        async function loadCashFlow() {{
+            if (userRole !== 'admin') return;
+            
+            try {{
+                const response = await fetch('/api/dashboard');
+                if (!response.ok) throw new Error('Falha ao buscar dados do dashboard.');
+                const data = await response.json();
+                
+                const format = (value) => `R$ ${{parseFloat(value).toFixed(2).replace('.', ',')}}`;
+
+                document.getElementById('total-revenue').textContent = format(data.totalRevenue);
+                document.getElementById('total-appointments').textContent = data.completedAppointments.toString();
+                
+                document.getElementById('total-expenses').textContent = format(data.totalExpenses);
+                document.getElementById('net-income').textContent = format(data.netIncome);
+
+                const netIncomeCard = document.getElementById('net-income-card');
+                const netIncomeText = document.getElementById('net-income');
+                
+                netIncomeCard.classList.remove('border-purple-600', 'border-red-600');
+                netIncomeText.classList.remove('text-purple-800', 'text-red-800');
+                
+                if (data.netIncome >= 0) {{
+                    netIncomeCard.classList.add('border-purple-600');
+                    netIncomeText.classList.add('text-purple-800');
+                }} else {{
+                    netIncomeCard.classList.add('border-red-600');
+                    netIncomeText.classList.add('text-red-800');
+                }}
+                
+                renderChart(data.dailyData);
+                
+            }} catch (error) {{
+                 console.error("Erro ao carregar dashboard:", error);
+                 // Não abrir modal para evitar sobreposição, apenas loga.
+            }}
+        }}
+
+        // --- Lógica de Serviços (Mantida) ---
+
+        async function loadServicesList() {{
+            if (userRole !== 'admin') return; 
+            const servicesListEl = document.getElementById('current-services-list');
+            servicesListEl.innerHTML = '<li class="text-center text-gray-500 p-4">Carregando lista de serviços...</li>';
+
+            try {{
+                const response = await fetch('/api/services');
+                if (!response.ok) throw new Error('Falha ao buscar serviços.');
+                const services = await response.json();
+
+                servicesListEl.innerHTML = ''; 
+                
+                if (services.length === 0) {{
+                    servicesListEl.innerHTML = '<li class="text-center text-gray-500 p-4">Nenhum serviço cadastrado.</li>';
+                    return;
+                }}
+
+                services.forEach((service) => {{
+                    const formattedPrice = parseFloat(service.price).toFixed(2).replace('.', ',');
+                    
+                    const listItem = `
+                        <li id="svc-${{service.id}}" class="p-3 bg-white rounded-lg shadow flex justify-between items-center">
+                            <div>
+                                ${{service.name}} <span class="font-bold text-red-600">R$ ${{formattedPrice}}</span>
+                                <span class="text-sm text-gray-500 ml-2">(${{service.duration}} min)</span>
+                            </div>
+                            <div class="space-x-2">
+                                <button onclick="editService(${{service.id}}, '${{service.name.replace(/'/g, "\\'") }}', ${{service.price}}, ${{service.duration}})" class="text-blue-500 hover:text-blue-700 text-sm">Editar</button>
+                                <button onclick="deleteService(${{service.id}}, '${{service.name.replace(/'/g, "\\'") }}')" class="text-red-500 hover:text-red-700 text-sm">Excluir</button>
+                            </div>
+                        </li>
+                    `;
+                    servicesListEl.insertAdjacentHTML('beforeend', listItem);
+                }});
+                
+            }} catch (error) {{
+                console.error("Erro ao carregar serviços:", error);
+                openModal('Erro de Dados', error.message, false);
+                servicesListEl.innerHTML = '<li class="text-center text-red-500 p-4">Erro ao carregar serviços.</li>';
+            }}
+        }}
+        
+        async function handleServiceSubmit(event) {{
+            event.preventDefault();
+            if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem gerenciar serviços.', false);
+            
+            const form = event.target;
+            const docId = form['service-doc-id'].value;
+            const url = '/api/services';
+            
+            const serviceData = {{
+                id: docId ? parseInt(docId) : null,
+                name: form['service-name'].value,
+                price: parseFloat(form['service-price'].value),
+                duration: parseInt(form['service-duration'].value),
+            }};
+
+            showLoading(true);
+
+            try {{
+                const response = await fetch(url, {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify(serviceData)
+                }});
+
+                const result = await response.json();
+
+                if (!response.ok) throw new Error(result.message || 'Erro ao salvar serviço.');
+                
+                openModal('Sucesso', result.message, true);
+                clearServiceForm();
+                loadServicesList();
+                
+            }} catch (error) {{
+                console.error("Erro ao salvar serviço:", error);
+                openModal('Erro', `Não foi possível salvar o serviço. ${{error.message}}`, false);
+            }} finally {{
+                showLoading(false);
+            }}
+        }}
+        
+        function editService(id, name, price, duration) {{
+            if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem editar serviços.', false);
+            document.getElementById('service-doc-id').value = id;
+            document.getElementById('service-name').value = name;
+            document.getElementById('service-price').value = parseFloat(price); 
+            document.getElementById('service-duration').value = duration;
+            document.getElementById('service-button-text').textContent = 'Salvar Edição';
+            document.getElementById('cancel-service-button').classList.remove('hidden');
+        }}
+
+        function clearServiceForm() {{
+            document.getElementById('service-doc-id').value = '';
+            document.getElementById('service-name').value = '';
+            document.getElementById('service-price').value = '';
+            document.getElementById('service-duration').value = '';
+            document.getElementById('service-button-text').textContent = 'Salvar Novo Serviço';
+            document.getElementById('cancel-service-button').classList.add('hidden');
+        }}
+
+        async function deleteService(id, name) {{
+            if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem excluir serviços.', false);
+            
+            showLoading(true);
+            try {{
+                const response = await fetch('/api/services', {{
+                    method: 'DELETE',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ id: id }})
+                }});
+
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.message || 'Erro ao excluir.');
+
+                openModal('Serviço Excluído', result.message, true);
+                loadServicesList();
+            }} catch (error) {{
+                console.error("Erro ao excluir serviço:", error);
+                openModal('Erro', `Não foi possível excluir o serviço. ${{error.message}}`, false);
+            }} finally {{
+                showLoading(false);
+            }}
+        }}
+
+        // --- Lógica de Despesas (Mantida) ---
+
+        async function loadExpenses() {{
+            if (userRole !== 'admin') return; 
+
+            const expensesListEl = document.getElementById('current-expenses-list');
+            expensesListEl.innerHTML = '<tr><td colspan="4" class="text-center text-gray-500 p-4">Carregando despesas...</td></tr>';
+            
+            try {{
+                const response = await fetch('/api/expenses');
+                if (!response.ok) throw new Error('Falha ao buscar despesas.');
+                const expenses = await response.json();
+
+                expensesListEl.innerHTML = ''; 
+                let totalAmount = 0;
+                
+                if (expenses.length === 0) {{
+                    expensesListEl.innerHTML = '<tr><td colspan="4" class="text-center text-gray-500 p-4">Nenhuma despesa registrada para este mês.</td></tr>';
+                    return;
+                }}
+
+                expenses.forEach((expense) => {{
+                    totalAmount += expense.amount;
+                    const formattedAmount = expense.amount.toFixed(2).replace('.', ',');
+                    
+                    const listItem = `
+                        <tr id="exp-${{expense.id}}">
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${{expense.expense_date}}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${{expense.description}}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-red-600 font-bold">R$ ${{formattedAmount}}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                <button onclick="deleteExpense(${{expense.id}}, '${{expense.description.replace(/'/g, "\\'") }}')" class="text-red-500 hover:text-red-700 transition-colors duration-200">
+                                    Excluir
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                    expensesListEl.insertAdjacentHTML('beforeend', listItem);
+                }});
+
+                // Adicionar linha de total
+                expensesListEl.insertAdjacentHTML('beforeend', `
+                    <tr class="bg-gray-100 font-bold">
+                        <td class="px-6 py-4 whitespace-nowrap text-base text-gray-900" colspan="2">TOTAL DESPESAS (MÊS)</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-base text-red-700">R$ ${{totalAmount.toFixed(2).replace('.', ',')}}</td>
+                        <td class="px-6 py-4 whitespace-nowrap"></td>
+                    </tr>
+                `);
+                
+            }} catch (error) {{
+                console.error("Erro ao carregar despesas:", error);
+                openModal('Erro de Dados', error.message, false);
+                expensesListEl.innerHTML = '<tr><td colspan="4" class="text-center text-red-500 p-4">Erro ao carregar despesas.</td></tr>';
+            }}
+        }}
+
+        async function handleExpenseSubmit(event) {{
+            event.preventDefault();
+            if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem gerenciar despesas.', false);
+            
+            const form = event.target;
+            
+            const expenseData = {{
+                description: form['expense-description'].value,
+                amount: parseFloat(form['expense-amount'].value),
+                date: form['expense-date'].value,
+            }};
+
+            showLoading(true);
+
+            try {{
+                const response = await fetch('/api/expenses', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify(expenseData)
+                }});
+
+                const result = await response.json();
+
+                if (!response.ok) throw new Error(result.message || 'Erro ao adicionar despesa.');
+                
+                openModal('Despesa Adicionada', result.message, true);
+                form.reset();
+                loadExpenses(); // Recarrega a lista
+                loadCashFlow(); // Atualiza o dashboard
+                
+            }} catch (error) {{
+                console.error("Erro ao adicionar despesa:", error);
+                openModal('Erro', `Não foi possível adicionar a despesa. ${{error.message}}`, false);
+            }} finally {{
+                showLoading(false);
+            }}
+        }}
+
+        async function deleteExpense(id, description) {{
+            if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem excluir despesas.', false);
+            
+            showLoading(true);
+            try {{
+                const response = await fetch(`/api/expenses/${{id}}`, {{
+                    method: 'DELETE',
+                }});
+
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.message || 'Erro ao excluir.');
+
+                openModal('Despesa Excluída', `Despesa "${{description}}" excluída com sucesso.`, true);
+                loadExpenses(); // Recarrega a lista
+                loadCashFlow(); // Atualiza o dashboard
+            }} catch (error) {{
+                console.error("Erro ao excluir despesa:", error);
+                openModal('Erro', `Não foi possível excluir a despesa. ${{error.message}}`, false);
+            }} finally {{
+                showLoading(false);
+            }}
+        }}
+
+        // --- Inicialização da Aplicação (Mantida) ---
+        window.onload = function() {{
+            // Define a data atual no campo de despesa
+            document.getElementById('expense-date').valueAsDate = new Date();
+
+            // Checa se já existe uma sessão de usuário ao carregar a página
+            fetch('/api/login', {{ method: 'GET' }})
+                .then(response => response.json())
+                .then(data => {{
+                    if (data.role && data.role !== 'none') {{
+                        userRole = data.role;
+                        document.getElementById('login-view').classList.add('hidden');
+                        document.getElementById('app-header').classList.remove('hidden');
+                        if (userRole === 'admin') {{
+                            document.getElementById('view-switch-container').classList.remove('hidden');
+                            changeView('admin');
+                        }} else {{
+                            document.getElementById('view-switch-container').classList.add('hidden');
+                            changeView('schedule');
+                        }}
+                    }} else {{
+                        document.getElementById('login-view').classList.remove('hidden');
+                        showLoading(false); 
+                    }}
+                }})
+                .catch(() => {{
+                    document.getElementById('login-view').classList.remove('hidden');
+                    showLoading(false);
+                }});
+        }};
+
+
+        // --- EXPOSIÇÃO GLOBAL DE FUNÇÕES ---
+        window.changeView = changeView;
+        window.handleAppointmentSubmit = handleAppointmentSubmit;
+        window.changeAdminTab = changeAdminTab;
+        window.closeModal = closeModal;
+        window.updateAppointmentStatus = updateAppointmentStatus;
+        window.handleServiceSubmit = handleServiceSubmit;
+        window.clearServiceForm = clearServiceForm;
+        window.editService = editService;
+        window.deleteService = deleteService;
+        
+        // Expondo funções de despesa e arquivamento
+        window.handleExpenseSubmit = handleExpenseSubmit;
+        window.deleteExpense = deleteExpense;
+        window.archiveAppointment = archiveAppointment; // NOVO
+        window.loadArchivedAppointments = loadArchivedAppointments; // NOVO
+        
+        window.handleRoleSelection = handleRoleSelection;
+        window.handleAdminLogin = handleAdminLogin;
+        window.logout = logout;
+
+    </script>
+</body>
+</html>
+"""
 
 if __name__ == '__main__':
-    # Configurações de execução
-    port = int(os.environ.get('PORT', 5000))
-    app.run(debug=True, host='0.0.0.0', port=port)
+    app.run(debug=True)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
