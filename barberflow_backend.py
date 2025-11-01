@@ -510,7 +510,7 @@ HTML_TEMPLATE = f"""
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BarberFlow - Agendamento e Gestão (Python/Postgres)</title>
+    <title>BarberFlow - Agendamento e Gestão </title>
     <!-- Carrega Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Carrega Chart.js para gráficos dinâmicos -->
@@ -1685,6 +1685,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
