@@ -4,17 +4,15 @@ import psycopg2
 import psycopg2.extras 
 from flask import Flask, request, jsonify, render_template_string, session, redirect, url_for
 from datetime import datetime, date
-from dotenv import load_dotenv
-load_dotenv()
 
 # --- 1. CONFIGURAÇÃO E CONEXÃO COM POSTGRESQL ---
 # ATENÇÃO: Substitua estas variáveis pelas suas credenciais reais do PostgreSQL.
 DB_CONFIG = {
-    'database': os.environ.get('barberflow_db'),
-    'user': os.environ.get('postgres'),
-    'password': os.environ.get('wordKey##'),
-    'host': os.environ.get('localhost'),
-    'port': os.environ.get('5433')
+    'database': os.environ.get('PG_DB', 'barberflow_db'),
+    'user': os.environ.get('PG_USER', 'postgres'),
+    'password': os.environ.get('PG_PASSWORD', ''),
+    'host': os.environ.get('PG_HOST', 'localhost'),
+    'port': os.environ.get('PG_PORT', '5433')
 }
 
 # Chave secreta para sessões do Flask. MUDE ESTA CHAVE em produção!
@@ -46,7 +44,6 @@ def minutes_to_time(total_minutes):
     return f"{H:02d}:{M:02d}"
 # --- Fim das Funções de Horário ---
 
-
 def get_db_connection():
     """Cria e retorna uma conexão com o banco de dados."""
     try:
@@ -57,7 +54,7 @@ def get_db_connection():
         return None
 
 def initialize_db():
-    """Cria as tabelas Services, Appointments e Monthly_Expenses se não existirem."""
+    """Cria as tabelas Services, Appointments, Monthly_Expenses e garante a coluna 'is_archived'."""
     conn = get_db_connection()
     if conn is None:
         return
@@ -74,7 +71,7 @@ def initialize_db():
                 );
             """)
 
-            # Tabela de Agendamentos (Adicionado UNIQUE constraint para evitar agendamentos duplicados)
+            # Tabela de Agendamentos (Adicionando a coluna is_archived no SQL base para garantir)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS appointments (
                     id SERIAL PRIMARY KEY,
@@ -87,8 +84,8 @@ def initialize_db():
                     client_email VARCHAR(100),
                     service_price NUMERIC(10, 2) NOT NULL,
                     status VARCHAR(20) NOT NULL DEFAULT 'Agendado',
-                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     is_archived BOOLEAN NOT NULL DEFAULT FALSE, -- NOVA COLUNA
+                    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
                     UNIQUE (barber_id, appointment_date, appointment_time) -- Garante unicidade
                 );
             """)
@@ -100,7 +97,6 @@ def initialize_db():
             except psycopg2.errors.DuplicateColumn:
                 pass # Coluna já existe, ignora o erro
 
-            
             # Tabela de Despesas Mensais
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS monthly_expenses (
@@ -114,7 +110,6 @@ def initialize_db():
             # Adicionar serviços mock se a tabela estiver vazia
             cur.execute("SELECT COUNT(*) FROM services;")
             if cur.fetchone()[0] == 0:
-                # Durations: Corte Simples (45 min), Design de Barba (30 min), Corte + Barba (75 min)
                 cur.execute("INSERT INTO services (name, price, duration) VALUES ('Corte Simples', 35.00, 45);")
                 cur.execute("INSERT INTO services (name, price, duration) VALUES ('Design de Barba', 25.00, 30);")
                 cur.execute("INSERT INTO services (name, price, duration) VALUES ('Corte + Barba', 55.00, 75);")
@@ -145,8 +140,8 @@ app.secret_key = FLASK_SECRET_KEY
 def get_role():
     """Obtém a função do usuário da sessão Flask."""
     return session.get('role', 'none')
-    
-    
+
+
 
 # --- Rotas de Autenticação e Configuração (Mantidas) ---
 
@@ -178,7 +173,7 @@ def logout():
     session.pop('role', None)
     return jsonify({'message': 'Logout bem-sucedido'}), 200
 
-# --- Rotas de Serviços (Admin e Cliente) (Mantidas) ---
+# --- Rotas de Serviços (Mantidas) ---
 
 @app.route('/api/services', methods=['GET', 'POST', 'PUT', 'DELETE'])
 def manage_services():
@@ -191,7 +186,6 @@ def manage_services():
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if request.method == 'GET':
-                # Inclui a duração do serviço, necessário para o cálculo de horários
                 cur.execute("SELECT id, name, price, duration FROM services ORDER BY name;")
                 services = cur.fetchall()
                 return jsonify(services)
@@ -318,10 +312,11 @@ def get_available_times():
     finally:
         conn.close()
 
-# --- Rotas de Agendamentos (Mantidas) ---
+# --- Rotas de Agendamentos (Atualizadas) ---
 
 @app.route('/api/appointments', methods=['GET', 'POST'])
 def manage_appointments():
+    """GET: Lista agendamentos ATIVOS. POST: Cria novo agendamento."""
     conn = get_db_connection()
     if conn is None:
         return jsonify({'message': 'Erro de conexão com o banco de dados'}), 500
@@ -332,12 +327,13 @@ def manage_appointments():
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if request.method == 'GET':
                 if role != 'admin':
-                    return jsonify({'message': 'Acesso negado. Apenas Barbeiros (Admin) podem ver todos os agendamentos.'}), 403
+                    return jsonify({'message': 'Acesso negado. Apenas Barbeiros (Admin) podem ver agendamentos.'}), 403
                 
-                cur.execute("SELECT id, barber_id, service_name, appointment_date, appointment_time, client_name, service_price, status FROM appointments ORDER BY appointment_date, appointment_time ASC;")
+                # RETORNA APENAS AGENDAMENTOS NÃO ARQUIVADOS (is_archived = FALSE)
+                cur.execute("SELECT id, barber_id, service_name, appointment_date, appointment_time, client_name, service_price, status FROM appointments WHERE is_archived = FALSE ORDER BY appointment_date, appointment_time ASC;")
                 appointments = cur.fetchall()
                 for appt in appointments:
-                    appt['appointment_date'] = appt['appointment_date'].strftime('%d-%m-%y')
+                    appt['appointment_date'] = appt['appointment_date'].strftime('%d-%m-%Y')
                 return jsonify(appointments)
 
             elif request.method == 'POST':
@@ -350,7 +346,7 @@ def manage_appointments():
                 client_phone = data.get('clientPhone')
                 client_email = data.get('clientEmail')
                 service_price = data.get('servicePrice')
-                
+
                 # O banco de dados agora tem uma restrição UNIQUE para evitar colisões
                 cur.execute("""
                     INSERT INTO appointments (barber_id, service_name, appointment_date, appointment_time, client_name, client_phone, client_email, service_price)
@@ -371,8 +367,10 @@ def manage_appointments():
     finally:
         conn.close()
 
+
 @app.route('/api/appointments/<int:id>/status', methods=['PUT'])
 def update_appointment_status(id):
+    """Atualiza o status (Concluído/Cancelado/Agendado) de um agendamento."""
     if get_role() != 'admin':
         return jsonify({'message': 'Acesso negado. Apenas Barbeiros (Admin) podem atualizar status.'}), 403
 
@@ -457,9 +455,8 @@ def archive_appointment(id):
         return jsonify({'message': f'Erro interno: {e}'}), 500
     finally:
         conn.close()
-        
 
-# --- ROTAS DE DESPESAS (Mantidas) ---
+# --- Rotas de Despesas (Mantidas) ---
 
 @app.route('/api/expenses', methods=['GET', 'POST'])
 def manage_expenses():
@@ -484,7 +481,7 @@ def manage_expenses():
                 """)
                 expenses = cur.fetchall()
                 for exp in expenses:
-                    exp['expense_date'] = exp['expense_date'].strftime('%Y-%m-%d')
+                    exp['expense_date'] = exp['expense_date'].strftime('%d-%m-%Y')
                     exp['amount'] = float(exp['amount'])
                 return jsonify(expenses)
 
@@ -492,7 +489,7 @@ def manage_expenses():
                 data = request.get_json()
                 description = data.get('description')
                 amount = data.get('amount')
-                expense_date = data.get('date', datetime.now().strftime('%Y-%m-%d'))
+                expense_date = data.get('date', datetime.now().strftime('%d-%m-%Y'))
                 
                 cur.execute("""
                     INSERT INTO monthly_expenses (description, amount, expense_date)
@@ -550,9 +547,10 @@ def get_dashboard_data():
 
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            first_day_of_month = date.today().replace(day=1).strftime('%d-%m-%dY')
+            # Data Inicial do Mês
+            first_day_of_month = date.today().replace(day=1).strftime('%d-%m-%Y')
             
-            # 1. Receita Total e Agendamentos Concluídos do Mês
+            # 1. Receita Total e Agendamentos Concluídos do Mês (Apenas Agendamentos NÃO ARQUIVADOS)
             cur.execute("""
                 SELECT SUM(service_price) as total_revenue, COUNT(*) as completed_count
                 FROM appointments
@@ -576,7 +574,7 @@ def get_dashboard_data():
 
             net_income = total_revenue - total_expenses
             
-            # 3. Dados Diários para o Gráfico (últimos 30 dias de agendamentos CONCLUÍDOS)
+            # 3. Dados Diários para o Gráfico (últimos 30 dias de agendamentos CONCLUÍDOS e NÃO ARQUIVADOS)
             cur.execute("""
                 SELECT 
                     appointment_date,
@@ -614,7 +612,7 @@ def get_dashboard_data():
         conn.close()
 
 
-# --- 3. CONTEÚDO HTML E JAVASCRIPT (ATUALIZADO PARA DISPONIBILIDADE) ---
+# --- 3. CONTEÚDO HTML E JAVASCRIPT (ATUALIZADO) ---
 
 # O frontend é injetado como um template de string em Flask.
 HTML_TEMPLATE = f"""
@@ -623,7 +621,7 @@ HTML_TEMPLATE = f"""
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BarberFlow - Agendamento e Gestão (Python/Postgres)</title>
+    <title>BarberFlow - Agendamento e Gestão </title>
     <!-- Carrega Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Carrega Chart.js para gráficos dinâmicos -->
@@ -634,8 +632,13 @@ HTML_TEMPLATE = f"""
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
         body {{
             font-family: 'Inter', sans-serif;
-            background-color: #0a0a0a;
-            background: url('{{{{ url_for('static', filename='barbearia5.jpg') }}}}') no-repeat center center / cover;
+            background-color: #f3f4f6;
+            background-image: url('https://raw.githubusercontent.com/Rainando025/barberflow/refs/heads/main/barbearia5.jpg');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+            color: #eee;
         }}
         #loading-overlay {{
             z-index: 50;
@@ -671,117 +674,118 @@ HTML_TEMPLATE = f"""
     <main class="py-10">
         <div id="app-container" class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
             
-        <!-- 0. TELA DE LOGIN (tema barbearia) -->
-        <div id="login-view" class="flex justify-center items-center h-[100vh]">
-          <div class="w-full max-w-md p-8 rounded-2xl shadow-2xl border-2 border-yellow-500 bg-gradient-to-b from-gray-900 to-black">
-            
-            <!-- LOGO / TÍTULO -->
-            <div class="flex flex-col items-center space-y-4 mb-6">
-              <!-- LOGO opcional -->
-              <div class="bg-black border-2 border-yellow-500 rounded-full p-2">
-                <img src="/static/logo.png" alt="Logo BarberFlow" onerror="this.style.display='none'"
-                     class="w-24 h-24 rounded-full object-cover shadow-lg">
+            <!-- 0. TELA DE LOGIN (tema barbearia) -->
+            <div id="login-view" class="flex justify-center items-center h-[100vh]">
+              <div class="w-full max-w-md p-8 rounded-2xl shadow-2xl border-2 border-yellow-500 bg-gradient-to-b from-gray-900 to-black">
+                
+                <!-- LOGO / TÍTULO -->
+                <div class="flex flex-col items-center space-y-4 mb-6">
+                  <!-- LOGO opcional -->
+                  <div class="bg-black border-2 border-yellow-500 rounded-full p-2">
+                    <img src="https://raw.githubusercontent.com/Rainando025/barberflow/refs/heads/main/logo.png" alt="Logo BarberFlow" onerror="this.style.display='none'"
+                         class="w-24 h-24 rounded-full object-cover shadow-lg">
+                  </div>
+                  <h2 class="text-3xl font-extrabold text-yellow-400 tracking-wide text-center">
+                    Autêntica<span class="text-white">Barbershop</span>
+                  </h2>
+                  <p class="text-sm text-gray-300 text-center">Escolha sua forma de acesso para continuar</p>
+                </div>
+    
+                <!-- BOTÃO CLIENTE -->
+                <button onclick="handleRoleSelection('client')" 
+                  class="w-full mb-4 py-3 px-4 rounded-lg shadow-md text-base font-semibold bg-yellow-500 text-black hover:bg-yellow-400 transition-all duration-200 transform hover:scale-[1.03]">
+                  💈 Agendar um Serviço (Cliente)
+                </button>
+    
+                <!-- DIVISOR -->
+                <div class="relative flex py-5 items-center">
+                  <div class="flex-grow border-t border-gray-700"></div>
+                  <span class="flex-shrink mx-4 text-gray-400 text-sm">OU</span>
+                  <div class="flex-grow border-t border-gray-700"></div>
+                </div>
+    
+                <!-- FORM ADMIN -->
+                <form onsubmit="handleAdminLogin(event)" class="space-y-4">
+                  <input type="password" id="admin-key" placeholder="Chave de Acesso do Barbeiro" required 
+                         class="w-full py-3 px-4 border border-gray-700 rounded-lg shadow-sm bg-transparent text-white placeholder-gray-400 focus:ring-yellow-500 focus:border-yellow-500 focus:outline-none">
+                  
+                  <button type="submit" 
+                    class="w-full py-3 px-4 rounded-lg shadow-md text-base font-semibold text-white bg-gray-900 border border-yellow-500 hover:bg-black transition-all duration-200 transform hover:scale-[1.03]">
+                    🔑 Entrar como Barbeiro (Admin)
+                  </button>
+    
+                  <p id="login-message" class="text-center text-sm text-red-400 font-semibold mt-2"></p>
+                </form>
+    
+                <!-- RODAPÉ -->
+                <p class="mt-8 text-center text-xs text-gray-400">
+                  Autêntica Barbershop © 2025 — <span class="text-yellow-500">Autencidade em cada corte</span>
+                </p>
               </div>
-              <h2 class="text-3xl font-extrabold text-yellow-400 tracking-wide text-center">
-                Barber<span class="text-white">Flow</span>
-              </h2>
-              <p class="text-sm text-gray-300 text-center">Escolha sua forma de acesso para continuar</p>
             </div>
 
-            <!-- BOTÃO CLIENTE -->
-            <button onclick="handleRoleSelection('client')" 
-              class="w-full mb-4 py-3 px-4 rounded-lg shadow-md text-base font-semibold bg-yellow-500 text-black hover:bg-yellow-400 transition-all duration-200 transform hover:scale-[1.03]">
-              💈 Agendar um Serviço (Cliente)
-            </button>
-
-            <!-- DIVISOR -->
-            <div class="relative flex py-5 items-center">
-              <div class="flex-grow border-t border-gray-700"></div>
-              <span class="flex-shrink mx-4 text-gray-400 text-sm">OU</span>
-              <div class="flex-grow border-t border-gray-700"></div>
-            </div>
-
-            <!-- FORM ADMIN -->
-            <form onsubmit="handleAdminLogin(event)" class="space-y-4">
-              <input type="password" id="admin-key" placeholder="Chave de Acesso do Barbeiro" required 
-                     class="w-full py-3 px-4 border border-gray-700 rounded-lg shadow-sm bg-transparent text-white placeholder-gray-400 focus:ring-yellow-500 focus:border-yellow-500 focus:outline-none">
-              
-              <button type="submit" 
-                class="w-full py-3 px-4 rounded-lg shadow-md text-base font-semibold text-white bg-gray-900 border border-yellow-500 hover:bg-black transition-all duration-200 transform hover:scale-[1.03]">
-                🔑 Entrar como Barbeiro (Admin)
-              </button>
-
-              <p id="login-message" class="text-center text-sm text-red-400 font-semibold mt-2"></p>
-            </form>
-
-            <!-- RODAPÉ -->
-            <p class="mt-8 text-center text-xs text-gray-400">
-              Autêntica Barbershop © 2025 — <span class="text-yellow-500">Autencidade em cada corte</span>
-            </p>
-          </div>
-        </div>
-
-            <!-- 1. VISTA DO CLIENTE (AGENDAMENTO) -->
-            <div id="schedule-view" class="hidden bg-black p-6 md:p-10 rounded-xl shadow-2xl border-t-4 border-or-600">
-                <h2 class="text-3xl font-bold text-white mb-6 border-b pb-2">Agendamento Online</h2>
-                <form id="appointment-form" onsubmit="handleAppointmentSubmit(event)" class="space-y-6">
-                    
-                    <!-- Passo 1: Barbeiro e Serviço -->
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                            <label for="barber" class="block text-sm font-medium text-yellow-500">Escolha o Barbeiro</label>
-                            <select id="barber" required class="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
-                                <option value="">-- Selecione o Profissional --</option>
-                                <option value="barber1">João (Especialista em Fade)</option>
-                                <option value="barber2">Pedro (Especialista em Clássico)</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label for="service" class="block text-sm font-medium text-yellow-500">Escolha o Corte/Serviço</label>
-                            <select id="service" required class="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
-                                <option value="">-- Carregando Serviços... --</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <!-- Passo 2: Data e Hora (Horário dinâmico) -->
-                    <div>
-                        <h3 class="text-lg font-semibold text-white mb-3 mt-4">Data e Horário Disponível</h3>
+                <!-- 1. VISTA DO CLIENTE (AGENDAMENTO) -->
+                <div id="schedule-view" class="hidden bg-black p-6 md:p-10 rounded-xl shadow-2xl border-t-4 border-red-600">
+                    <h2 class="text-3xl font-bold text-white mb-6 border-b pb-2">Agendamento Online</h2>
+                    <form id="appointment-form" onsubmit="handleAppointmentSubmit(event)" class="space-y-6">
+                        
+                        <!-- Passo 1: Barbeiro e Serviço -->
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
-                                <label for="date" class="block text-sm font-medium text-yellow-500">Data Desejada</label>
-                                <input type="date" id="date" required class="mt-1 block w-full py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                <label for="barber" class="block text-sm font-medium text-yellow-500">Escolha o Barbeiro</label>
+                                <select id="barber" required class="mt-1 block w-full pl-3 pr-10 py-3 text-black border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
+                                    <option value="">-- Selecione o Profissional --</option>
+                                    <option value="barber1">Franklin Barber</option>
+                                    <option value="barber2"> </option>
+                                </select>
                             </div>
                             <div>
-                                <label for="time" class="block text-sm font-medium text-yellow-500">Horários Disponíveis</label>
-                                <select id="time" required class="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500 sm:text-sm">
-                                    <option value="">-- Selecione um Barbeiro e Data --</option>
+                                <label for="service" class="block text-sm font-medium text-yellow-500">Escolha o Corte/Serviço</label>
+                                <select id="service" required class="mt-1 block w-full pl-3 pr-10 py-3 text-black border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-lg shadow-sm">
+                                    <option value="">-- Carregando Serviços... --</option>
                                 </select>
                             </div>
                         </div>
-                    </div>
-
-                    <!-- Passo 3: Dados do Cliente -->
-                    <div>
-                        <h3 class="text-lg font-semibold text-white mb-3 mt-4">Seus Dados</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <input type="text" id="client-name" placeholder="Seu Nome Completo" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
-                            <input type="tel" id="client-phone" placeholder="Seu Telefone (Whatsapp)" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
-                            <input type="email" id="client-email" placeholder="Seu Email (Opcional)" class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+    
+                        <!-- Passo 2: Data e Hora (Horário dinâmico) -->
+                        <div>
+                            <h3 class="text-lg font-semibold text-white mb-3 mt-4">Data e Horário Disponível</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <label for="date" class="block text-sm font-medium text-yellow-500">Data Desejada</label>
+                                    <input type="date" id="date" required class="mt-1 block w-full py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                </div>
+                                <div>
+                                    <label for="time" class="block text-sm font-medium text-yellow-500">Horários Disponíveis</label>
+                                    <select id="time" required class="mt-1 block w-full pl-3 pr-10 py-3 text-black border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500 sm:text-sm">
+                                        <option value="">-- Selecione um Barbeiro e Data --</option>
+                                    </select>
+                                </div>
+                            </div>
                         </div>
-                    </div>
+    
+                        <!-- Passo 3: Dados do Cliente -->
+                        <div>
+                            <h3 class="text-lg font-semibold text-white mb-3 mt-4">Seus Dados</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <input type="text" id="client-name" placeholder="Seu Nome Completo" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                <input type="tel" id="client-phone" placeholder="Seu Telefone (Whatsapp)" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                <input type="email" id="client-email" placeholder="Seu Email (Opcional)" class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                            </div>
+                        </div>
+    
+                        <!-- Botão de Agendar -->
+                        <button type="submit" id="submit-button" class="w-full mt-8 py-3 px-4 border border-transparent rounded-lg shadow-md text-base font-medium text-white bg-orange-600 hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all duration-200 transform hover:scale-[1.01]">
+                            Confirmar Agendamento
+                        </button>
+                    </form>
+                </div>
 
-                    <!-- Botão de Agendar -->
-                    <button type="submit" id="submit-button" class="w-full mt-8 py-3 px-4 border border-transparent rounded-lg shadow-md text-base font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all duration-200 transform hover:scale-[1.01]">
-                        Confirmar Agendamento
-                    </button>
-                </form>
-            </div>
 
             <!-- 2. VISTA DO BARBEIRO (ADMIN) -->
-            <div id="admin-view" class="hidden bg-white p-6 md:p-10 rounded-xl shadow-2xl border-t-4 border-red-600">
-                <h2 class="text-3xl font-bold text-gray-800 mb-6">Painel do Barbeiro</h2>
-                <p id="admin-role-warning" class="bg-red-100 border-l-4 border-red-500 text-red-700 p-3 mb-4 hidden" role="alert">
+            <div id="admin-view" class="hidden bg-black p-6 md:p-10 rounded-xl shadow-2xl border-t-4 border-red-600">
+                <h2 class="text-3xl font-bold text-yellow-700 mb-6">Painel do Barbeiro</h2>
+                <p id="admin-role-warning" class="bg-red-100 border-l-4 border-red-500 text-orange-600 p-3 mb-4 hidden" role="alert">
                     <span class="font-bold">Atenção:</span> Você não possui permissão de Barbeiro (Admin) para acessar esta aba.
                 </p>
 
@@ -789,18 +793,18 @@ HTML_TEMPLATE = f"""
                 <div class="border-b border-gray-200">
                     <nav class="-mb-px flex space-x-8" aria-label="Tabs">
                         <button onclick="changeAdminTab('appointments')" id="tab-appointments" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-red-500 text-red-600">
-                            Agendamentos
+                            Agendamentos Ativos
                         </button>
-                        <button onclick="changeAdminTab('services')" id="tab-services" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700">
+                        <button onclick="changeAdminTab('archived')" id="tab-archived" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white">
                             Agendamentos Arquivados
                         </button>
                         <button onclick="changeAdminTab('services')" id="tab-services" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white">
                             Serviços e Preços
                         </button>
-                        <button onclick="changeAdminTab('expenses')" id="tab-expenses" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700">
+                        <button onclick="changeAdminTab('expenses')" id="tab-expenses" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white">
                             Despesas
                         </button>
-                        <button onclick="changeAdminTab('dashboard')" id="tab-dashboard" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700">
+                        <button onclick="changeAdminTab('dashboard')" id="tab-dashboard" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-transparent text-gray-500 hover:border-gray-300 hover:text-white">
                             Dashboard e Caixa
                         </button>
                     </nav>
@@ -809,9 +813,10 @@ HTML_TEMPLATE = f"""
                 <!-- Conteúdo das Tabs -->
                 <div class="mt-6 space-y-8">
                     
-                    <!-- 2.1. Agendamentos do Dia (Real-Time) -->
+                    <!-- 2.1. Agendamentos Ativos (NÃO ARQUIVADOS) -->
                     <div id="appointments-tab" class="tab-content">
-                        <h3 class="text-xl font-semibold text-gray-800 mb-4">Próximos Agendamentos</h3>
+                        <h3 class="text-xl font-semibold text-white mb-4">Próximos Agendamentos (Ativos)</h3>
+                        <p class="text-sm text-orange-500 mb-4">Apenas agendamentos Ativos (não arquivados) são exibidos aqui. Arquive os agendamentos antigos/finalizados.</p>
                         <div class="bg-gray-50 p-4 rounded-lg shadow-inner">
                             <p class="text-sm text-gray-600 mb-4">Atualize o status para calcular o Fluxo de Caixa.</p>
                             <div id="appointments-list" class="space-y-4">
@@ -819,7 +824,7 @@ HTML_TEMPLATE = f"""
                             </div>
                         </div>
                     </div>
-                    
+
                     <!-- 2.1.b. Agendamentos Arquivados (NOVA TAB) -->
                     <div id="archived-tab" class="tab-content hidden">
                         <h3 class="text-xl font-semibold text-white mb-4">Agendamentos Arquivados</h3>
@@ -831,9 +836,9 @@ HTML_TEMPLATE = f"""
                         </div>
                     </div>
 
-                    <!-- 2.2. Gerenciamento de Serviços e Preços -->
+                    <!-- 2.2. Gerenciamento de Serviços e Preços (Mantida) -->
                     <div id="services-tab" class="tab-content hidden">
-                        <h3 class="text-xl font-semibold text-gray-800 mb-4">Gerenciar Serviços</h3>
+                        <h3 class="text-xl font-semibold text-white mb-4">Gerenciar Serviços</h3>
                         
                         <!-- Formulário de Edição/Adição de Serviço -->
                         <form id="service-form" onsubmit="handleServiceSubmit(event)" class="bg-gray-50 p-6 rounded-lg shadow mb-6 space-y-4">
@@ -844,7 +849,7 @@ HTML_TEMPLATE = f"""
                                 <input type="number" id="service-price" placeholder="Preço (R$)" required min="0" step="0.01" class="py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                                 <input type="number" id="service-duration" placeholder="Duração (minutos)" required min="10" class="py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                             </div>
-                            <button type="submit" class="w-full py-2 px-4 rounded-lg text-white bg-red-600 hover:bg-red-700 transition-colors duration-200">
+                            <button type="submit" class="w-full py-2 px-4 rounded-lg text-white bg-orange-600 hover:bg-orange-700 transition-colors duration-200">
                                 <span id="service-button-text">Salvar Novo Serviço</span>
                             </button>
                             <button type="button" onclick="clearServiceForm()" id="cancel-service-button" class="w-full py-2 px-4 rounded-lg text-gray-700 bg-gray-200 hover:bg-gray-300 transition-colors duration-200 hidden">
@@ -854,13 +859,13 @@ HTML_TEMPLATE = f"""
 
                         <!-- Lista de Serviços Atuais -->
                         <ul id="current-services-list" class="space-y-2">
-                            <li class="text-center text-gray-500 p-4">Carregando lista de serviços...</li>
+                            <li class="text-center text-black p-4">Carregando lista de serviços...</li>
                         </ul>
                     </div>
 
-                    <!-- 2.3. Gerenciamento de Despesas -->
+                    <!-- 2.3. Gerenciamento de Despesas (Mantida) -->
                     <div id="expenses-tab" class="tab-content hidden">
-                        <h3 class="text-xl font-semibold text-gray-800 mb-4">Gerenciar Despesas do Mês</h3>
+                        <h3 class="text-xl font-semibold text-white mb-4">Gerenciar Despesas do Mês</h3>
                         
                         <!-- Formulário de Adição de Despesa -->
                         <form id="expense-form" onsubmit="handleExpenseSubmit(event)" class="bg-gray-50 p-6 rounded-lg shadow mb-6 space-y-4">
@@ -887,7 +892,6 @@ HTML_TEMPLATE = f"""
                                     </tr>
                                 </thead>
                                 <tbody id="current-expenses-list" class="bg-white divide-y divide-gray-200">
-                                    <!-- Lista de despesas será injetada aqui -->
                                     <tr><td colspan="4" class="text-center text-gray-500 p-4">Carregando despesas...</td></tr>
                                 </tbody>
                             </table>
@@ -895,9 +899,9 @@ HTML_TEMPLATE = f"""
                     </div>
 
 
-                    <!-- 2.4. Dashboard e Fluxo de Caixa -->
+                    <!-- 2.4. Dashboard e Fluxo de Caixa (Mantida) -->
                     <div id="dashboard-tab" class="tab-content hidden">
-                        <h3 class="text-xl font-semibold text-gray-800 mb-4">Dashboard Financeiro (Mês Atual)</h3>
+                        <h3 class="text-xl font-semibold text-white mb-4">Dashboard Financeiro (Mês Atual)</h3>
                         
                         <div class="grid grid-cols-1 sm:grid-cols-4 gap-6">
                             
@@ -975,11 +979,11 @@ HTML_TEMPLATE = f"""
         let userRole = 'none'; 
         const ADMIN_KEY = '{ADMIN_KEY}'; // Injetado do Python
         let revenueChartInstance = null; // Instância global do Chart.js
-        
+
         // Estado do Agendamento
-        let selectedServiceId = null; 
-        
-        // --- Funções de UI e Navegação (Mantidas) ---
+        let selectedServiceId = null;
+
+        // --- Funções de UI e Navegação ---
         let currentView = 'schedule';
         let currentAdminTab = 'appointments';
 
@@ -994,10 +998,10 @@ HTML_TEMPLATE = f"""
             
             const titleElement = document.getElementById('modal-title');
             if (isSuccess) {{
-                titleElement.classList.remove('text-red-700', 'text-gray-900');
+                titleElement.classList.remove('text-red-700', 'text-green-700');
                 titleElement.classList.add('text-green-700');
             }} else {{
-                titleElement.classList.remove('text-green-700', 'text-gray-900');
+                titleElement.classList.remove('text-green-700', 'text-red-700');
                 titleElement.classList.add('text-red-700');
             }}
             modal.classList.remove('hidden');
@@ -1130,7 +1134,7 @@ HTML_TEMPLATE = f"""
             if (tabName === 'appointments') {{
                 loadAppointments();
             }} else if (tabName === 'archived') {{
-                loadArchivedAppointments(); // NOVA CHAMADA    
+                loadArchivedAppointments(); // NOVA CHAMADA
             }} else if (tabName === 'services') {{
                 loadServicesList();
             }} else if (tabName === 'expenses') {{
@@ -1140,8 +1144,8 @@ HTML_TEMPLATE = f"""
             }}
         }}
 
-
-        // ----------------------------------------------------------------------
+        
+                 // ----------------------------------------------------------------------
         // LÓGICA DO CLIENTE (AGENDAMENTO) - Disponibilidade de Horário (NOVO)
         // ----------------------------------------------------------------------
         
@@ -1220,11 +1224,12 @@ HTML_TEMPLATE = f"""
             }} finally {{
                 showLoading(false);
             }}
-        }}
-        
-        
+        }}   
+
+        // ----------------------------------------------------------------------
         // LÓGICA DO CLIENTE (AGENDAMENTO) - Comunicação com Flask API (Mantida)
-    
+        // ----------------------------------------------------------------------
+
         async function loadClientServices() {{
             const serviceSelect = document.getElementById('service');
             serviceSelect.innerHTML = '<option value="">-- Carregando Serviços... --</option>';
@@ -1247,8 +1252,8 @@ HTML_TEMPLATE = f"""
                     option.setAttribute('data-duration', service.duration); // Duração adicionada
                     serviceSelect.appendChild(option);
                 }});
-                setupTimeListeners(); // Configura os listeners após o carregamento
-                
+
+                 setupTimeListeners(); // Configura os listeners após o carregamento
             }} catch (error) {{
                 console.error("Erro ao carregar serviços:", error);
                 serviceSelect.innerHTML = '<option value="">-- Erro ao carregar serviços --</option>';
@@ -1269,7 +1274,7 @@ HTML_TEMPLATE = f"""
             const servicePrice = parseFloat(serviceOption.getAttribute('data-price'));
             const serviceName = serviceOption.getAttribute('data-name');
             const selectedTime = form.time.value; // Horário escolhido pelo cliente
-            
+
             if (!selectedTime) {{
                 return openModal('Erro', 'Selecione um horário disponível antes de agendar.', false);
             }}
@@ -1278,7 +1283,7 @@ HTML_TEMPLATE = f"""
                 barberId: form.barber.value, 
                 serviceName: serviceName,
                 date: form.date.value,
-                time: selectedTime,
+                time: form.time.value,
                 clientName: form['client-name'].value,
                 clientPhone: form['client-phone'].value,
                 clientEmail: form['client-email'].value,
@@ -1317,7 +1322,7 @@ HTML_TEMPLATE = f"""
 
 
         // ----------------------------------------------------------------------
-        // LÓGICA DO BARBEIRO (ADMIN) - (Mantida)
+        // LÓGICA DO BARBEIRO (ADMIN)
         // ----------------------------------------------------------------------
         
         function loadAdminData() {{
@@ -1328,7 +1333,7 @@ HTML_TEMPLATE = f"""
         // Função Genérica para Renderizar Agendamentos (Usada para Ativos e Arquivados)
         function renderAppointmentList(appointments, listElementId, isArchivedList = false) {{
             const appointmentsListEl = document.getElementById(listElementId);
-            
+
             appointmentsListEl.innerHTML = '';
 
             if (appointments.length === 0) {{
@@ -1339,52 +1344,48 @@ HTML_TEMPLATE = f"""
             appointments.forEach((appointment) => {{
                 const appointmentId = appointment.id;
 
-                    let statusClass = '';
-                    switch (appointment.status) {{
-                        case 'Concluído': statusClass = 'bg-green-100 text-green-800'; break;
-                        case 'Cancelado': statusClass = 'bg-red-100 text-red-800'; break;
-                        case 'Agendado': default: statusClass = 'bg-yellow-100 text-yellow-800'; break;
-                    }}
+                let statusClass = '';
+                switch (appointment.status) {{
+                    case 'Concluído': statusClass = 'bg-green-100 text-green-800'; break;
+                    case 'Cancelado': statusClass = 'bg-red-100 text-red-800'; break;
+                    case 'Agendado': default: statusClass = 'bg-yellow-100 text-yellow-800'; break;
+                }}
 
-                    const barberName = appointment.barber_id === 'barber1' ? 'João' : (appointment.barber_id === 'barber2' ? 'Pedro' : appointment.barber_id);
-                    const formattedPrice = parseFloat(appointment.service_price).toFixed(2).replace('.', ',');
-                    
-                    let actionButton = '';
-                    if (!isArchivedList) {{
-                        // Botão de Arquivar para lista ATIVA
-                        actionButton = `<button onclick="archiveAppointment(${{appointmentId}}, true)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-gray-500 hover:bg-gray-600 transition-colors duration-200">Arquivar</button>`;
-                    }} else {{
-                        // Botão de Desarquivar para lista ARQUIVADA
-                        actionButton = `<button onclick="archiveAppointment(${{appointmentId}}, false)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200">Desarquivar</button>`;
-                    }}
-
-                    const appointmentHtml = `
-                        <div id="appt-${{appointmentId}}" class="p-4 bg-white rounded-lg shadow flex flex-col sm:flex-row justify-between items-start sm:items-center transition-all duration-200 hover:shadow-md">
-                            <div class="mb-2 sm:mb-0">
-                                <p class="font-bold text-lg text-gray-800">${{appointment.appointment_time}} (${{appointment.appointment_date}})</p>
-                                <p class="text-sm text-gray-600">${{appointment.client_name}} - ${{appointment.service_name}} c/ ${{barberName}} (R$ ${{formattedPrice}})</p>
-                            </div>
-                            <div class="flex items-center space-x-2 mt-2 sm:mt-0">
-                                <span class="px-3 py-1 text-xs font-semibold rounded-full ${{statusClass}}">${{appointment.status}}</span>
+                const barberName = appointment.barber_id === 'barber1' ? 'Franklin Barber' : (appointment.barber_id === 'barber2' ? '' : appointment.barber_id);
+                const formattedPrice = parseFloat(appointment.service_price).toFixed(2).replace('.', ',');
+                
+                let actionButton = '';
+                if (!isArchivedList) {{
+                    // Botão de Arquivar para lista ATIVA
+                    actionButton = `<button onclick="archiveAppointment(${{appointmentId}}, true)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-gray-500 hover:bg-gray-600 transition-colors duration-200">Arquivar</button>`;
+                }} else {{
+                    // Botão de Desarquivar para lista ARQUIVADA
+                    actionButton = `<button onclick="archiveAppointment(${{appointmentId}}, false)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200">Desarquivar</button>`;
+                }}
+                
+                const appointmentHtml = `
+                    <div id="appt-${{appointmentId}}" class="p-4 bg-white rounded-lg shadow flex flex-col sm:flex-row justify-between items-start sm:items-center transition-all duration-200 hover:shadow-md">
+                        <div class="mb-2 sm:mb-0">
+                            <p class="font-bold text-lg text-gray-800">${{appointment.appointment_time}} (${{appointment.appointment_date}})</p>
+                            <p class="text-sm text-gray-600">${{appointment.client_name}} - ${{appointment.service_name}} c/ ${{barberName}} (R$ ${{formattedPrice}})</p>
+                        </div>
+                        <div class="flex items-center space-x-2 mt-2 sm:mt-0">
+                            <span class="px-3 py-1 text-xs font-semibold rounded-full ${{statusClass}}">${{appointment.status}}</span>
+                            ${{isArchivedList ? '' : `
                                 <select onchange="updateAppointmentStatus(${{appointmentId}}, this.value)" class="py-1 px-2 border border-gray-300 rounded-lg text-sm focus:ring-red-500 focus:border-red-500">
                                     <option value="Agendado" ${{appointment.status === 'Agendado' ? 'selected' : ''}}>Agendado</option>
                                     <option value="Concluído" ${{appointment.status === 'Concluído' ? 'selected' : ''}}>Concluído</option>
                                     <option value="Cancelado" ${{appointment.status === 'Cancelado' ? 'selected' : ''}}>Cancelado</option>
-                                </select>
-                            </div>
+                                </select>`
+                            }}
+                            ${{actionButton}}
                         </div>
-                    `;
-                    appointmentsListEl.insertAdjacentHTML('beforeend', appointmentHtml);
-                }});
-
-                loadCashFlow();
-            }} catch (error) {{
-                console.error("Erro ao carregar agendamentos:", error);
-                openModal('Erro de Dados', error.message, false);
-                appointmentsListEl.innerHTML = '<p class="text-center text-red-500 p-4">Erro ao carregar agendamentos.</p>';
-            }}
+                    </div>
+                `;
+                appointmentsListEl.insertAdjacentHTML('beforeend', appointmentHtml);
+            }});
         }}
-        
+
         // Carrega Agendamentos ATIVOS
         async function loadAppointments() {{
             if (userRole !== 'admin') return; 
@@ -1480,8 +1481,8 @@ HTML_TEMPLATE = f"""
             }}
         }}
 
-        // --- Lógica de Dashboard, Serviços e Despesas (Mantidas) ---
-
+        // --- Lógica do Dashboard (Mantida) ---
+        
         let myChart;
         
         function renderChart(dailyData) {{
@@ -1506,16 +1507,16 @@ HTML_TEMPLATE = f"""
                         {{
                             label: 'Receita (R$)',
                             data: revenueData,
-                            backgroundColor: 'rgba(220, 38, 38, 0.7)', 
+                            backgroundColor: 'rgba(220, 38, 38, 0.7)',
                             borderColor: 'rgba(220, 38, 38, 1)',
                             yAxisID: 'yRevenue',
                         }},
                         {{
                             label: 'Cortes Concluídos',
                             data: appointmentsData,
-                            backgroundColor: 'rgba(59, 130, 246, 0.7)', 
+                            backgroundColor: 'rgba(59, 130, 246, 0.7)',
                             borderColor: 'rgba(59, 130, 246, 1)',
-                            type: 'line',
+                            type: 'line', 
                             yAxisID: 'yAppointments',
                             tension: 0.3
                         }}
@@ -1584,12 +1585,12 @@ HTML_TEMPLATE = f"""
                 
             }} catch (error) {{
                  console.error("Erro ao carregar dashboard:", error);
-                 openModal('Erro no Dashboard', error.message, false);
+                 // Não abrir modal para evitar sobreposição, apenas loga.
             }}
         }}
 
         // --- Lógica de Serviços (Mantida) ---
-        
+
         async function loadServicesList() {{
             if (userRole !== 'admin') return; 
             const servicesListEl = document.getElementById('current-services-list');
@@ -1714,9 +1715,9 @@ HTML_TEMPLATE = f"""
                 showLoading(false);
             }}
         }}
-        
+
         // --- Lógica de Despesas (Mantida) ---
-        
+
         async function loadExpenses() {{
             if (userRole !== 'admin') return; 
 
@@ -1755,6 +1756,7 @@ HTML_TEMPLATE = f"""
                     expensesListEl.insertAdjacentHTML('beforeend', listItem);
                 }});
 
+                // Adicionar linha de total
                 expensesListEl.insertAdjacentHTML('beforeend', `
                     <tr class="bg-gray-100 font-bold">
                         <td class="px-6 py-4 whitespace-nowrap text-base text-gray-900" colspan="2">TOTAL DESPESAS (MÊS)</td>
@@ -1797,9 +1799,8 @@ HTML_TEMPLATE = f"""
                 
                 openModal('Despesa Adicionada', result.message, true);
                 form.reset();
-                document.getElementById('expense-date').valueAsDate = new Date();
-                loadExpenses();
-                loadCashFlow(); 
+                loadExpenses(); // Recarrega a lista
+                loadCashFlow(); // Atualiza o dashboard
                 
             }} catch (error) {{
                 console.error("Erro ao adicionar despesa:", error);
@@ -1822,8 +1823,8 @@ HTML_TEMPLATE = f"""
                 if (!response.ok) throw new Error(result.message || 'Erro ao excluir.');
 
                 openModal('Despesa Excluída', `Despesa "${{description}}" excluída com sucesso.`, true);
-                loadExpenses();
-                loadCashFlow();
+                loadExpenses(); // Recarrega a lista
+                loadCashFlow(); // Atualiza o dashboard
             }} catch (error) {{
                 console.error("Erro ao excluir despesa:", error);
                 openModal('Erro', `Não foi possível excluir a despesa. ${{error.message}}`, false);
@@ -1834,8 +1835,10 @@ HTML_TEMPLATE = f"""
 
         // --- Inicialização da Aplicação (Mantida) ---
         window.onload = function() {{
+            // Define a data atual no campo de despesa
             document.getElementById('expense-date').valueAsDate = new Date();
 
+            // Checa se já existe uma sessão de usuário ao carregar a página
             fetch('/api/login', {{ method: 'GET' }})
                 .then(response => response.json())
                 .then(data => {{
@@ -1872,10 +1875,13 @@ HTML_TEMPLATE = f"""
         window.clearServiceForm = clearServiceForm;
         window.editService = editService;
         window.deleteService = deleteService;
-        window.archiveAppointment = archiveAppointment; // NOVO
-        window.loadArchivedAppointments = loadArchivedAppointments; // NOVO
+        
+        // Expondo funções de despesa e arquivamento
         window.handleExpenseSubmit = handleExpenseSubmit;
         window.deleteExpense = deleteExpense;
+        window.archiveAppointment = archiveAppointment; // NOVO
+        window.loadArchivedAppointments = loadArchivedAppointments; // NOVO
+        
         window.handleRoleSelection = handleRoleSelection;
         window.handleAdminLogin = handleAdminLogin;
         window.logout = logout;
@@ -1885,6 +1891,24 @@ HTML_TEMPLATE = f"""
 </html>
 """
 
-# Se o script for executado diretamente, inicie o Flask
 if __name__ == '__main__':
     app.run(debug=True)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
