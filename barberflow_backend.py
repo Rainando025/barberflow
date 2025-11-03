@@ -26,7 +26,7 @@ SHOP_HOURS = [
     ("14:00", "18:00")  # Tarde
 ]
 # Intervalo base para checagem de slots (todos os slots de agendamento devem ser múltiplos deste)
-SLOT_INTERVAL_MINUTES = 15 
+SLOT_INTERVAL_MINUTES = 60
 
 def time_to_minutes(time_str):
     """Converte 'HH:MM' para minutos desde meia-noite."""
@@ -414,7 +414,7 @@ def get_archived_appointments():
             cur.execute("SELECT id, barber_id, service_name, appointment_date, appointment_time, client_name, service_price, status FROM appointments WHERE is_archived = TRUE ORDER BY appointment_date DESC, appointment_time DESC;")
             appointments = cur.fetchall()
             for appt in appointments:
-                appt['appointment_date'] = appt['appointment_date'].strftime('%Y-%m-%d')
+                appt['appointment_date'] = appt['appointment_date'].strftime('%d-%m-%Y')
             return jsonify(appointments)
 
     except Exception as e:
@@ -749,7 +749,7 @@ HTML_TEMPLATE = f"""
     
                         <!-- Passo 2: Data e Hora (Horário dinâmico) -->
                         <div>
-                            <h3 class="text-lg font-semibold text-white mb-3 mt-4">Data e Horário Disponível</h3>
+                            <h3 class="text-lg font-semibold text-black mb-3 mt-4">Data e Horário Disponível</h3>
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div>
                                     <label for="date" class="block text-sm font-medium text-yellow-500">Data Desejada</label>
@@ -766,7 +766,7 @@ HTML_TEMPLATE = f"""
     
                         <!-- Passo 3: Dados do Cliente -->
                         <div>
-                            <h3 class="text-lg font-semibold text-white mb-3 mt-4">Seus Dados</h3>
+                            <h3 class="text-lg font-semibold text-black mb-3 mt-4">Seus Dados</h3>
                             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                                 <input type="text" id="client-name" placeholder="Seu Nome Completo" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                                 <input type="tel" id="client-phone" placeholder="Seu Telefone (Whatsapp)" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
@@ -1893,7 +1893,6 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
-
 
 
 
