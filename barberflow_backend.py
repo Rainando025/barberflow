@@ -1360,11 +1360,6 @@ HTML_TEMPLATE = f"""
                 const barberName = appointment.barber_id === 'barber1' ? 'Franklin Barber' : (appointment.barber_id === 'barber2' ? '' : appointment.barber_id);
                 const formattedPrice = parseFloat(appointment.service_price).toFixed(2).replace('.', ',');
                 
-                // ...
-                // NOVO: Botão de exclusão permanente
-                const deleteButton = `<button onclick="deleteAppointment(${{appointmentId}})" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-red-600 hover:bg-red-700 transition-colors duration-200">Excluir</button>`;
-                
-                
                 let actionButton = '';
                 if (!isArchivedList) {{
                     // Botão de Arquivar para lista ATIVA
@@ -1491,44 +1486,6 @@ HTML_TEMPLATE = f"""
                 showLoading(false);
             }}
         }}
-        
-        // Função para exclusão PERMANENTE de agendamento
-        async function deleteAppointment(id) {{
-            if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem excluir agendamentos.', false);
-
-            if (!confirm(`Tem certeza que deseja EXCLUIR PERMANENTEMENTE o agendamento #${id}? Esta ação não pode ser desfeita e remove os dados de histórico e dashboard.`)) {{
-                return;
-            }}
-
-            showLoading(true);
-            try {{
-                const response = await fetch(`/api/appointments/${id}`, {{ 
-                    method: 'DELETE' // Chama a nova rota DELETE
-                }});
-                const result = await response.json();
-
-                if (!response.ok) throw new Error(result.message || 'Erro ao excluir permanentemente.');
-
-                openModal('Exclusão Concluída', result.message, true);
-
-                // Remove o registro da tela (DOM)
-                const appointmentElement = document.getElementById(`appt-${id}`);
-                if (appointmentElement) {{
-                    appointmentElement.remove();
-                }}
-                
-                // Recarrega a lista para atualizar a contagem e o dashboard para atualizar os totais
-                loadAppointments();
-                loadCashFlow();
-
-            }} catch (error) {{
-                console.error("Erro ao excluir agendamento:", error);
-                openModal('Erro', `Não foi possível excluir o agendamento. ${{error.message}}`, false);
-            }} finally {{
-                showLoading(false);
-            }}
-        }}
-
 
         // --- Lógica do Dashboard (Mantida) ---
         
@@ -1930,7 +1887,7 @@ HTML_TEMPLATE = f"""
         window.deleteExpense = deleteExpense;
         window.archiveAppointment = archiveAppointment; // NOVO
         window.loadArchivedAppointments = loadArchivedAppointments; // NOVO
-        window.deleteAppointment = deleteAppointment; // NOVO
+        
         window.handleRoleSelection = handleRoleSelection;
         window.handleAdminLogin = handleAdminLogin;
         window.logout = logout;
