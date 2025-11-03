@@ -640,6 +640,12 @@ HTML_TEMPLATE = f"""
             background-attachment: fixed;
             color: #eee;
         }}
+        
+        input, select, textarea {{
+            color: #000 !important;       /* texto preto */
+            background-color: #fff !important; /* fundo branco */
+        }}
+
         #loading-overlay {{
             z-index: 50;
         }}
@@ -662,7 +668,7 @@ HTML_TEMPLATE = f"""
                 <button id="switch-schedule" onclick="changeView('schedule')" class="px-4 py-2 text-sm font-medium rounded-full transition-colors duration-200" style="background-color: #dc2626; color: white;">
                     Agendamento Cliente
                 </button>
-                <button id="switch-admin" onclick="changeView('admin')" class="px-4 py-2 text-sm font-medium rounded-full text-white bg-gray-700 hover:bg-gray-800 transition-colors duration-200">
+                <button id="switch-admin" onclick="changeView('admin')" class="px-4 py-2 text-sm font-medium rounded-full text-black bg-gray-700 hover:bg-gray-800 transition-colors duration-200">
                     Área Barbeiro
                 </button>
             </div>
@@ -749,7 +755,7 @@ HTML_TEMPLATE = f"""
     
                         <!-- Passo 2: Data e Hora (Horário dinâmico) -->
                         <div>
-                            <h3 class="text-lg font-semibold text-black mb-3 mt-4">Data e Horário Disponível</h3>
+                            <h3 class="text-lg font-semibold text-white mb-3 mt-4">Data e Horário Disponível</h3>
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div>
                                     <label for="date" class="block text-sm font-medium text-yellow-500">Data Desejada</label>
@@ -766,9 +772,9 @@ HTML_TEMPLATE = f"""
     
                         <!-- Passo 3: Dados do Cliente -->
                         <div>
-                            <h3 class="text-lg font-semibold text-black mb-3 mt-4">Seus Dados</h3>
+                            <h3 class="text-lg font-semibold text-white mb-3 mt-4">Seus Dados</h3>
                             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                <input type="text" id="client-name" placeholder="Seu Nome Completo" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                <input type="text" id="client-name" placeholder="Seu Nome Completo" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 text-black rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                                 <input type="tel" id="client-phone" placeholder="Seu Telefone (Whatsapp)" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                                 <input type="email" id="client-email" placeholder="Seu Email (Opcional)" class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                             </div>
