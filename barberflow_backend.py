@@ -1983,7 +1983,7 @@ HTML_TEMPLATE = f"""
         window.clearServiceForm = clearServiceForm;
         window.editService = editService;
         window.deleteArchivedAppointment = deleteArchivedAppointment;
-        
+        window.populateMonthFilters = populateMonthFilters; // <--- ADICIONE ESTA LINHA!
         // Expondo funções de despesa e arquivamento
         window.handleExpenseSubmit = handleExpenseSubmit;
         window.deleteExpense = deleteExpense;
@@ -2001,6 +2001,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
