@@ -455,6 +455,34 @@ def archive_appointment(id):
         return jsonify({'message': f'Erro interno: {e}'}), 500
     finally:
         conn.close()
+        
+# --- NOVA ROTA: DELETAR AGENDAMENTO PERMANENTEMENTE ---
+
+@app.route('/api/appointments/<int:id>', methods=['DELETE'])
+def delete_appointment(id):
+    """Deleta permanentemente um agendamento pelo ID. Restrito a Admin."""
+    if get_role() != 'admin':
+        return jsonify({'message': 'Acesso negado. Apenas Barbeiros (Admin) podem deletar agendamentos.'}), 403
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({'message': 'Erro de conexão com o banco de dados'}), 500
+
+    try:
+        with conn.cursor() as cur:
+            # Exclui o agendamento permanentemente pelo ID
+            cur.execute("DELETE FROM appointments WHERE id = %s RETURNING id;", (id,))
+            if cur.fetchone():
+                conn.commit()
+                return jsonify({'message': f'Agendamento ID {id} excluído permanentemente com sucesso.'})
+            return jsonify({'message': 'Agendamento não encontrado.'}), 404
+            
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro ao deletar agendamento: {e}")
+        return jsonify({'message': f'Erro interno: {e}'}), 500
+    finally:
+        conn.close()        
 
 # --- Rotas de Despesas (Mantidas) ---
 
@@ -1365,9 +1393,17 @@ HTML_TEMPLATE = f"""
                     // Botão de Arquivar para lista ATIVA
                     actionButton = `<button onclick="archiveAppointment(${{appointmentId}}, true)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-gray-500 hover:bg-gray-600 transition-colors duration-200">Arquivar</button>`;
                 }} else {{
-                    // Botão de Desarquivar para lista ARQUIVADA
-                    actionButton = `<button onclick="archiveAppointment(${{appointmentId}}, false)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200">Desarquivar</button>`;
-                }}
+                
+                    // Botões para lista ARQUIVADA (Desarquivar e Excluir)
+                    actionButton = `
+                        <button onclick="archiveAppointment(${{appointmentId}}, false)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200 mr-2">
+                            Desarquivar
+                        </button>
+                        <button onclick="deleteArchivedAppointment(${{appointmentId}})" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-red-600 hover:bg-red-700 transition-colors duration-200">
+                            Excluir Permanentemente
+                        </button>
+                    `;
+                }
                 
                 const appointmentHtml = `
                     <div id="appt-${{appointmentId}}" class="p-4 bg-white rounded-lg shadow flex flex-col sm:flex-row justify-between items-start sm:items-center transition-all duration-200 hover:shadow-md">
@@ -1482,6 +1518,35 @@ HTML_TEMPLATE = f"""
             }} catch (error) {{
                 console.error("Erro ao atualizar status:", error);
                 openModal('Erro', `Não foi possível atualizar o status. ${{error.message}}`, false);
+            }} finally {{
+                showLoading(false);
+            }}
+        }}
+        
+        // Deleta Agendamento Arquivado Permanentemente (NOVA FUNÇÃO)
+        async function deleteArchivedAppointment(id) {{
+            if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem deletar agendamentos.', false);
+            
+            // Confirmação antes de deletar permanentemente
+            if (!confirm(`Tem certeza que deseja DELETAR PERMANENTEMENTE o Agendamento #${id}? Esta ação não pode ser desfeita.`)) {
+                return;
+            }}
+
+            showLoading(true);
+            try {{
+                const response = await fetch(`/api/appointments/${id}`, {{
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' }}
+                }});
+                const result = await response.json();
+
+                if (!response.ok) throw new Error(result.message || 'Erro ao deletar permanentemente.');
+
+                openModal('Sucesso', result.message, true);
+                loadArchivedAppointments(); // Recarrega a lista para refletir a exclusão
+            }} catch (error) {{
+                console.error("Erro ao deletar agendamento:", error);
+                openModal('Erro', `Não foi possível deletar o agendamento. ${{error.message}}`, false);
             }} finally {{
                 showLoading(false);
             }}
@@ -1880,7 +1945,7 @@ HTML_TEMPLATE = f"""
         window.handleServiceSubmit = handleServiceSubmit;
         window.clearServiceForm = clearServiceForm;
         window.editService = editService;
-        window.deleteService = deleteService;
+        window.deleteArchivedAppointment = deleteArchivedAppointment;
         
         // Expondo funções de despesa e arquivamento
         window.handleExpenseSubmit = handleExpenseSubmit;
@@ -1899,7 +1964,6 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
-
 
 
 
