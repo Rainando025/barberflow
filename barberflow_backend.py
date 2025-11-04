@@ -64,7 +64,10 @@ def initialize_db():
         with conn.cursor() as cur:
             # --- LIMPEZA TEMPORÁRIA DOS DADOS MOCK ---
             cur.execute("""
-                DELETE FROM monthly_expenses WHERE description LIKE '%(Mock)%';""")
+                DELETE FROM monthly_expenses
+                WHERE description = 'Energia (Mock)' OR description = 'Aluguel (Mock)';
+            """)    
+                
             print("Despesas mock antigas TEMPORARIAMENTE removidas.")
             # ------------------------------------------
 
