@@ -18,7 +18,7 @@ DB_CONFIG = {
 # Chave secreta para sessões do Flask. MUDE ESTA CHAVE em produção!
 FLASK_SECRET_KEY = 'e205e9ea1d4aaf49f7b810ef5666d7aaffad3a9f1c66dbe4763e03faffef7b90'
 ADMIN_KEY = 'barberflowadmin'
-FIXED_EXPENSES = 0.00
+FIXED_EXPENSES = 1500.00
 
 # --- Configurações de Horário para Agendamento ---
 SHOP_HOURS = [
@@ -116,11 +116,11 @@ def initialize_db():
                 print("Serviços mock inseridos.")
 
             # Adicionar despesas mock se a tabela estiver vazia
-           # cur.execute("SELECT COUNT(*) FROM monthly_expenses;")
-            # if cur.fetchone()[0] == 0:
-                #cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Aluguel (Mock)', 1200.00);")
-                
-                #print("Despesas mock inseridas.")
+            cur.execute("SELECT COUNT(*) FROM monthly_expenses;")
+            if cur.fetchone()[0] == 0:
+                cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Aluguel (Mock)', 1200.00);")
+                cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Energia (Mock)', 200.00);")
+                print("Despesas mock inseridas.")
 
         conn.commit()
     except Exception as e:
@@ -455,34 +455,6 @@ def archive_appointment(id):
         return jsonify({'message': f'Erro interno: {e}'}), 500
     finally:
         conn.close()
-        
-# --- NOVA ROTA: DELETAR AGENDAMENTO PERMANENTEMENTE ---
-
-@app.route('/api/appointments/<int:id>', methods=['DELETE'])
-def delete_appointment(id):
-    """Deleta permanentemente um agendamento pelo ID. Restrito a Admin."""
-    if get_role() != 'admin':
-        return jsonify({'message': 'Acesso negado. Apenas Barbeiros (Admin) podem deletar agendamentos.'}), 403
-
-    conn = get_db_connection()
-    if conn is None:
-        return jsonify({'message': 'Erro de conexão com o banco de dados'}), 500
-
-    try:
-        with conn.cursor() as cur:
-            # Exclui o agendamento permanentemente pelo ID
-            cur.execute("DELETE FROM appointments WHERE id = %s RETURNING id;", (id,))
-            if cur.fetchone():
-                conn.commit()
-                return jsonify({'message': f'Agendamento ID {id} excluído permanentemente com sucesso.'})
-            return jsonify({'message': 'Agendamento não encontrado.'}), 404
-            
-    except Exception as e:
-        conn.rollback()
-        print(f"Erro ao deletar agendamento: {e}")
-        return jsonify({'message': f'Erro interno: {e}'}), 500
-    finally:
-        conn.close()        
 
 # --- Rotas de Despesas (Mantidas) ---
 
@@ -499,31 +471,15 @@ def manage_expenses():
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if request.method == 'GET':
-                # 1. NOVO: Pega o filtro de mês do frontend (YYYY-MM)
-                month_filter = request.args.get('month') 
-
-                if month_filter:
-                    # Se um mês foi selecionado no filtro (o que é o ideal):
-                    # Filtra a tabela monthly_expenses pelo mês/ano exato.
-                    cur.execute("""
-                        SELECT id, description, amount, expense_date 
-                        FROM monthly_expenses
-                        WHERE TO_CHAR(expense_date, 'YYYY-MM') = %s
-                        ORDER BY expense_date DESC;
-                    """, (month_filter,))
-                else:
-                    # FALLBACK: Se o filtro estiver vazio (ex: se o JS falhar ou você adicionar 'Todos os Meses'):
-                    # Mantém a lógica original de mostrar apenas o mês atual.
-                    cur.execute("""
-                        SELECT id, description, amount, expense_date 
-                        FROM monthly_expenses
-                        WHERE EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE)
-                        AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)
-                        ORDER BY expense_date DESC;
-                    """)
-                
+                # Pega despesas do mês atual
+                cur.execute("""
+                    SELECT id, description, amount, expense_date 
+                    FROM monthly_expenses
+                    WHERE EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE)
+                    AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)
+                    ORDER BY expense_date DESC;
+                """)
                 expenses = cur.fetchall()
-                # ... (o restante do seu código para formatar a saída, que deve ser mantido)
                 for exp in expenses:
                     exp['expense_date'] = exp['expense_date'].strftime('%d-%m-%Y')
                     exp['amount'] = float(exp['amount'])
@@ -591,39 +547,27 @@ def get_dashboard_data():
 
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # 1. NOVO: Lendo o filtro de mês (YYYY-MM)
-            month_filter = request.args.get('month') 
-            
-            # 2. Definindo a Condição de Filtro SQL
-            if month_filter:
-                # Se há filtro, usamos o filtro (ex: 2025-05)
-                date_condition_sql = "TO_CHAR(appointment_date, 'YYYY-MM') = %s"
-                expense_condition_sql = "TO_CHAR(expense_date, 'YYYY-MM') = %s"
-                sql_params = (month_filter,)
-            else:
-                # Se não há filtro, usamos o mês atual (comportamento original)
-                date_condition_sql = "EXTRACT(MONTH FROM appointment_date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM appointment_date) = EXTRACT(YEAR FROM CURRENT_DATE)"
-                expense_condition_sql = "EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)"
-                sql_params = tuple() # Tupla vazia se não houver parâmetro
+            # Data Inicial do Mês
+            first_day_of_month = date.today().replace(day=1).strftime('%d-%m-%Y')
             
             # 1. Receita Total e Agendamentos Concluídos do Mês (Apenas Agendamentos NÃO ARQUIVADOS)
-            cur.execute(f"""
+            cur.execute("""
                 SELECT SUM(service_price) as total_revenue, COUNT(*) as completed_count
                 FROM appointments
                 WHERE status = 'Concluído' 
-                AND {date_condition_sql};
-            """, sql_params)
+                AND appointment_date >= %s;
+            """, (first_day_of_month,))
             
             revenue_result = cur.fetchone()
             total_revenue = float(revenue_result['total_revenue'] or 0.0)
             completed_count = revenue_result['completed_count'] or 0
 
             # 2. Despesas Totais do Mês
-            cur.execute(f"""
+            cur.execute("""
                 SELECT SUM(amount) as total_expenses
                 FROM monthly_expenses
-                WHERE {expense_condition_sql};
-            """, sql_params)
+                WHERE expense_date >= %s;
+            """, (first_day_of_month,))
             
             expense_result = cur.fetchone()
             total_expenses = float(expense_result['total_expenses'] or 0.0)
@@ -929,18 +873,10 @@ HTML_TEMPLATE = f"""
                     <div id="expenses-tab" class="tab-content hidden">
                         <h3 class="text-xl font-semibold text-white mb-4">Gerenciar Despesas do Mês</h3>
                         
-                        <div class="mb-4 flex justify-start">
-                            <div class="w-48">
-                                <label for="expense-month-filter" class="block text-sm font-medium text-gray-700">Filtrar Mês:</label>
-                                <select id="expense-month-filter" onchange="loadExpenses()" 
-                                        class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-md">
-                                    </select>
-                            </div>
-                        </div>
                         <!-- Formulário de Adição de Despesa -->
                         <form id="expense-form" onsubmit="handleExpenseSubmit(event)" class="bg-gray-50 p-6 rounded-lg shadow mb-6 space-y-4">
                             <h4 class="text-lg font-medium text-gray-700">Adicionar Nova Despesa</h4>
-                            <input type="text" id="expense-description" placeholder="Descrição (Ex: Aluguel, Energia, Produtos)" required class="w-full py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                            <input type="text" id="expense-description" placeholder="Descrição (Ex: Aluguel, Compra de Shampo)" required class="w-full py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                             <div class="grid grid-cols-2 gap-4">
                                 <input type="number" id="expense-amount" placeholder="Valor (R$)" required min="0" step="0.01" class="py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                                 <input type="date" id="expense-date" required class="py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
@@ -974,12 +910,7 @@ HTML_TEMPLATE = f"""
                         <h3 class="text-xl font-semibold text-white mb-4">Dashboard Financeiro (Mês Atual)</h3>
                         
                         <div class="grid grid-cols-1 sm:grid-cols-4 gap-6">
-                            <div class="mb-4">
-                                <label for="dashboard-month-filter" class="block text-sm font-medium text-gray-700">Filtrar Mês:</label>
-                                <select id="dashboard-month-filter" onchange="loadDashboardData()" 
-                                        class="mt-1 block w-48 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-md">
-                                    </select>
-                            </div>
+                            
                             <!-- Card 1: Total Recebido -->
                             <div class="bg-green-50 p-6 rounded-xl shadow-lg border-l-4 border-green-600">
                                 <p class="text-sm font-medium text-green-700">Receita de Serviços</p>
@@ -1434,16 +1365,8 @@ HTML_TEMPLATE = f"""
                     // Botão de Arquivar para lista ATIVA
                     actionButton = `<button onclick="archiveAppointment(${{appointmentId}}, true)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-gray-500 hover:bg-gray-600 transition-colors duration-200">Arquivar</button>`;
                 }} else {{
-                
-                    // Botões para lista ARQUIVADA (Desarquivar e Excluir)
-                    actionButton = `
-                        <button onclick="archiveAppointment(${{appointmentId}}, false)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200 mr-2">
-                            Desarquivar
-                        </button>
-                        <button onclick="deleteArchivedAppointment(${{appointmentId}})" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-red-600 hover:bg-red-700 transition-colors duration-200">
-                            Excluir Permanentemente
-                        </button>
-                    `;
+                    // Botão de Desarquivar para lista ARQUIVADA
+                    actionButton = `<button onclick="archiveAppointment(${{appointmentId}}, false)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200">Desarquivar</button>`;
                 }}
                 
                 const appointmentHtml = `
@@ -1559,53 +1482,6 @@ HTML_TEMPLATE = f"""
             }} catch (error) {{
                 console.error("Erro ao atualizar status:", error);
                 openModal('Erro', `Não foi possível atualizar o status. ${{error.message}}`, false);
-            }} finally {{
-                showLoading(false);
-            }}
-        }}
-        
-        // Deleta Agendamento Arquivado Permanentemente (COM TRATAMENTO DE ERRO MELHORADO)
-        async function deleteArchivedAppointment(id) {{
-            if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem deletar agendamentos.', false);
-            
-            if (!confirm(`Tem certeza que deseja DELETAR PERMANENTEMENTE o Agendamento #${{id}}? Esta ação não pode ser desfeita.`)) {{
-                return;
-            }}
-
-            showLoading(true);
-            try {{
-                const response = await fetch(`/api/appointments/${{id}}`, {{
-                    method: 'DELETE',
-                    headers: {{ 'Content-Type': 'application/json' }}
-                }});
-
-                // --- NOVO TRATAMENTO DE ERRO AQUI ---
-                // 1. Verifica se houve um redirecionamento (Sessão Expirada)
-                if (response.redirected) {{
-                     throw new Error("Sua sessão expirou. Por favor, faça login novamente.");
-                }}
-                
-                // 2. Tenta analisar a resposta como JSON
-                let result;
-                try {{
-                    result = await response.json();
-                }} catch (e) {{
-                    // Se falhar (recebeu HTML), lança um erro genérico
-                    throw new Error(`Resposta inesperada do servidor (Status ${{response.status}}). Tente novamente.`);
-                }}
-                
-                // 3. Verifica se o status HTTP foi um erro (e usa a mensagem do JSON)
-                if (!response.ok) {{
-                    throw new Error(result.message || `Erro ao deletar (Status ${{response.status}}).`);
-                }}
-
-                // Caso de Sucesso
-                openModal('Sucesso', result.message, true);
-                loadArchivedAppointments();
-                
-            }} catch (error) {{
-                console.error("Erro ao deletar agendamento:", error);
-                openModal('Erro', `Não foi possível deletar o agendamento. ${{error.message}}`, false);
             }} finally {{
                 showLoading(false);
             }}
@@ -1993,72 +1869,6 @@ HTML_TEMPLATE = f"""
                     showLoading(false);
                 }});
         }};
-        
-        // Função para popular os filtros de mês e carregar dados iniciais
-        function populateMonthFilters() {{
-            const expenseFilter = document.getElementById('expense-month-filter');
-            const dashboardFilter = document.getElementById('dashboard-month-filter');
-            
-            if (!expenseFilter || !dashboardFilter) {{
-                return;
-            }}
-
-            const today = new Date();
-            const monthNames = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
-
-            expenseFilter.innerHTML = '';
-            dashboardFilter.innerHTML = '';
-
-            // Opção para ver todos os meses (opcional, remova se quiser forçar o filtro)
-            let defaultOption = new Option("Todos os Meses", "");
-            // expenseFilter.add(defaultOption.cloneNode(true));
-            // dashboardFilter.add(defaultOption.cloneNode(true));
-
-            let currentMonthValue = '';
-
-            for (let i = 0; i < 12; i++) {{
-                let d = new Date(today.getFullYear(), today.getMonth() - i, 1);
-                
-                // Formato YYYY-MM
-                const monthValue = `${{d.getFullYear()}}-${{String(d.getMonth() + 1).padStart(2, '0')}}`;
-                const monthText = `${{monthNames[d.getMonth()]}} / ${{d.getFullYear()}}`;
-                
-                let option = new Option(monthText, monthValue);
-                
-                expenseFilter.add(option.cloneNode(true));
-                dashboardFilter.add(option.cloneNode(true));
-
-                // Seleciona o mês atual (i=0) por padrão
-                if (i === 0) {{
-                    expenseFilter.value = monthValue;
-                    dashboardFilter.value = monthValue;
-                    currentMonthValue = monthValue;
-                }}
-            }}
-            
-            // NOVO: Chamada de Carregamento forçado após definir o filtro do mês atual
-            // A função changeAdminTab, se já estiver definida para 'dashboard-tab', 
-            // já deve chamar loadDashboardData(), mas forçar aqui garante a atualização
-            // da despesa na aba, caso a aba inicial seja 'expenses'
-            
-            // Força o carregamento dos dados do Dashboard (se a aba for a inicial)
-            // Se o dashboard é a aba padrão, loadDashboardData() já deve ser chamado pela changeAdminTab
-            
-            // Se a aba 'expenses' for a primeira a ser carregada (o que não é o caso aqui), 
-            // essa chamada seria necessária. Mas é sempre bom ter.
-            
-            // Forçamos o carregamento do mês atual para que a tela não fique vazia:
-            loadExpenses();
-            loadDashboardData(); 
-        }}
-        
-        
-        // Adicione este bloco NOVO:
-        window.onload = function() {{
-            populateMonthFilters(); // NOVO: Ativa o filtro
-            // Já logado como admin, carrega a primeira aba
-            changeAdminTab('dashboard-tab'); 
-        }}
 
 
         // --- EXPOSIÇÃO GLOBAL DE FUNÇÕES ---
@@ -2070,17 +1880,14 @@ HTML_TEMPLATE = f"""
         window.handleServiceSubmit = handleServiceSubmit;
         window.clearServiceForm = clearServiceForm;
         window.editService = editService;
-        window.deleteArchivedAppointment = deleteArchivedAppointment;
+        window.deleteService = deleteService;
         
         // Expondo funções de despesa e arquivamento
         window.handleExpenseSubmit = handleExpenseSubmit;
         window.deleteExpense = deleteExpense;
         window.archiveAppointment = archiveAppointment; // NOVO
         window.loadArchivedAppointments = loadArchivedAppointments; // NOVO
-        window.loadExpenses = loadExpenses; 
-        window.loadDashboardData = loadDashboardData;
         
-        window.populateMonthFilters = populateMonthFilters; // <--- ADICIONE ESTA LINHA!
         window.handleRoleSelection = handleRoleSelection;
         window.handleAdminLogin = handleAdminLogin;
         window.logout = logout;
@@ -2092,8 +1899,6 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
-
-
 
 
 
