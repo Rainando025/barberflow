@@ -913,6 +913,14 @@ HTML_TEMPLATE = f"""
                     <div id="expenses-tab" class="tab-content hidden">
                         <h3 class="text-xl font-semibold text-white mb-4">Gerenciar Despesas do Mês</h3>
                         
+                        <div class="mb-4 flex justify-start">
+                            <div class="w-48">
+                                <label for="expense-month-filter" class="block text-sm font-medium text-gray-700">Filtrar Mês:</label>
+                                <select id="expense-month-filter" onchange="loadExpenses()" 
+                                        class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-md">
+                                    </select>
+                            </div>
+                        </div>
                         <!-- Formulário de Adição de Despesa -->
                         <form id="expense-form" onsubmit="handleExpenseSubmit(event)" class="bg-gray-50 p-6 rounded-lg shadow mb-6 space-y-4">
                             <h4 class="text-lg font-medium text-gray-700">Adicionar Nova Despesa</h4>
@@ -950,7 +958,12 @@ HTML_TEMPLATE = f"""
                         <h3 class="text-xl font-semibold text-white mb-4">Dashboard Financeiro (Mês Atual)</h3>
                         
                         <div class="grid grid-cols-1 sm:grid-cols-4 gap-6">
-                            
+                            <div class="mb-4">
+                                <label for="dashboard-month-filter" class="block text-sm font-medium text-gray-700">Filtrar Mês:</label>
+                                <select id="dashboard-month-filter" onchange="loadDashboardData()" 
+                                        class="mt-1 block w-48 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-md">
+                                    </select>
+                            </div>
                             <!-- Card 1: Total Recebido -->
                             <div class="bg-green-50 p-6 rounded-xl shadow-lg border-l-4 border-green-600">
                                 <p class="text-sm font-medium text-green-700">Receita de Serviços</p>
@@ -1983,13 +1996,16 @@ HTML_TEMPLATE = f"""
         window.clearServiceForm = clearServiceForm;
         window.editService = editService;
         window.deleteArchivedAppointment = deleteArchivedAppointment;
-        window.populateMonthFilters = populateMonthFilters; // <--- ADICIONE ESTA LINHA!
+        
         // Expondo funções de despesa e arquivamento
         window.handleExpenseSubmit = handleExpenseSubmit;
         window.deleteExpense = deleteExpense;
         window.archiveAppointment = archiveAppointment; // NOVO
         window.loadArchivedAppointments = loadArchivedAppointments; // NOVO
+        window.loadExpenses = loadExpenses; 
+        window.loadDashboardData = loadDashboardData;
         
+        window.populateMonthFilters = populateMonthFilters; // <--- ADICIONE ESTA LINHA!
         window.handleRoleSelection = handleRoleSelection;
         window.handleAdminLogin = handleAdminLogin;
         window.logout = logout;
@@ -2001,7 +2017,6 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
-
 
 
 
