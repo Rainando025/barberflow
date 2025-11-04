@@ -1536,7 +1536,7 @@ HTML_TEMPLATE = f"""
             try {{
                 const response = await fetch(`/api/appointments/${id}`, {{
                     method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' }}
+                    headers: {{ 'Content-Type': 'application/json' }}
                 }});
                 const result = await response.json();
 
