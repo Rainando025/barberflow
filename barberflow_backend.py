@@ -1403,7 +1403,7 @@ HTML_TEMPLATE = f"""
                             Excluir Permanentemente
                         </button>
                     `;
-                }
+                }}
                 
                 const appointmentHtml = `
                     <div id="appt-${{appointmentId}}" class="p-4 bg-white rounded-lg shadow flex flex-col sm:flex-row justify-between items-start sm:items-center transition-all duration-200 hover:shadow-md">
@@ -1528,7 +1528,7 @@ HTML_TEMPLATE = f"""
             if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem deletar agendamentos.', false);
             
             // Confirmação antes de deletar permanentemente
-            if (!confirm(`Tem certeza que deseja DELETAR PERMANENTEMENTE o Agendamento #${id}? Esta ação não pode ser desfeita.`)) {
+            if (!confirm(`Tem certeza que deseja DELETAR PERMANENTEMENTE o Agendamento #${id}? Esta ação não pode ser desfeita.`)) {{
                 return;
             }}
 
