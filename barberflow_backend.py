@@ -458,10 +458,9 @@ def archive_appointment(id):
 
 # --- Rotas de Despesas (Mantidas) ---
 
-# --- Rotas de Despesas (CORRIGIDA: TUDO USA 'EXPENSES') ---
 @app.route('/api/expenses', methods=['GET', 'POST'])
 def manage_expenses():
-    """Gerencia a listagem e adição de despesas na tabela 'expenses'."""
+    """Gerencia a listagem e adição de despesas mensais."""
     if get_role() != 'admin':
         return jsonify({'message': 'Acesso negado. Apenas Barbeiros (Admin) podem gerenciar despesas.'}), 403
 
@@ -472,27 +471,14 @@ def manage_expenses():
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if request.method == 'GET':
-                # Pega o filtro de mês do frontend (YYYY-MM)
-                month_filter = request.args.get('month')
-                
-                if month_filter:
-                    # Filtra a tabela 'expenses' pelo mês/ano exato.
-                    cur.execute("""
-                        SELECT id, description, amount, expense_date 
-                        FROM expenses
-                        WHERE TO_CHAR(expense_date, 'YYYY-MM') = %s
-                        ORDER BY expense_date DESC;
-                    """, (month_filter,))
-                else:
-                    # FALLBACK: Se não houver filtro, mostra apenas o mês atual.
-                    cur.execute("""
-                        SELECT id, description, amount, expense_date 
-                        FROM expenses
-                        WHERE EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE)
-                        AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)
-                        ORDER BY expense_date DESC;
-                    """)
-                
+                # Pega despesas do mês atual
+                cur.execute("""
+                    SELECT id, description, amount, expense_date 
+                    FROM monthly_expenses
+                    WHERE EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE)
+                    AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)
+                    ORDER BY expense_date DESC;
+                """)
                 expenses = cur.fetchall()
                 for exp in expenses:
                     exp['expense_date'] = exp['expense_date'].strftime('%d-%m-%Y')
@@ -505,9 +491,8 @@ def manage_expenses():
                 amount = data.get('amount')
                 expense_date = data.get('date', datetime.now().strftime('%d-%m-%Y'))
                 
-                # Insere na tabela 'expenses'
                 cur.execute("""
-                    INSERT INTO expenses (description, amount, expense_date)
+                    INSERT INTO monthly_expenses (description, amount, expense_date)
                     VALUES (%s, %s, %s) RETURNING id;
                 """, (description, amount, expense_date))
                 
@@ -550,10 +535,9 @@ def delete_expense(id):
 
 # --- ROTA DO DASHBOARD (Mantida) ---
 
-# --- Rota do Dashboard (CORRIGIDA: TUDO USA 'EXPENSES') ---
 @app.route('/api/dashboard', methods=['GET'])
 def get_dashboard_data():
-    """Calcula e retorna dados do dashboard, aplicando o filtro de mês na tabela 'expenses'."""
+    """Calcula e retorna dados do dashboard, incluindo dados diários para o gráfico."""
     if get_role() != 'admin':
         return jsonify({'message': 'Acesso negado.'}), 403
 
@@ -563,44 +547,34 @@ def get_dashboard_data():
 
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # 1. Lendo o filtro de mês (YYYY-MM)
-            month_filter = request.args.get('month') 
+            # Data Inicial do Mês
+            first_day_of_month = date.today().replace(day=1).strftime('%d-%m-%Y')
             
-            # 2. Definindo a Condição de Filtro SQL
-            if month_filter:
-                date_condition_sql = "TO_CHAR(appointment_date, 'YYYY-MM') = %s"
-                expense_condition_sql = "TO_CHAR(expense_date, 'YYYY-MM') = %s"
-                sql_params = (month_filter,)
-            else:
-                date_condition_sql = "EXTRACT(MONTH FROM appointment_date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM appointment_date) = EXTRACT(YEAR FROM CURRENT_DATE)"
-                expense_condition_sql = "EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)"
-                sql_params = tuple()
-            
-            # 3. Receita Total e Agendamentos Concluídos do Mês (tabela appointments)
-            cur.execute(f"""
+            # 1. Receita Total e Agendamentos Concluídos do Mês (Apenas Agendamentos NÃO ARQUIVADOS)
+            cur.execute("""
                 SELECT SUM(service_price) as total_revenue, COUNT(*) as completed_count
                 FROM appointments
                 WHERE status = 'Concluído' 
-                AND {date_condition_sql};
-            """, sql_params)
+                AND appointment_date >= %s;
+            """, (first_day_of_month,))
             
             revenue_result = cur.fetchone()
             total_revenue = float(revenue_result['total_revenue'] or 0.0)
             completed_count = revenue_result['completed_count'] or 0
 
-            # 4. Despesas Totais do Mês - USA A TABELA 'EXPENSES'
-            cur.execute(f"""
+            # 2. Despesas Totais do Mês
+            cur.execute("""
                 SELECT SUM(amount) as total_expenses
-                FROM expenses
-                WHERE {expense_condition_sql};
-            """, sql_params)
+                FROM monthly_expenses
+                WHERE expense_date >= %s;
+            """, (first_day_of_month,))
             
             expense_result = cur.fetchone()
             total_expenses = float(expense_result['total_expenses'] or 0.0)
 
             net_income = total_revenue - total_expenses
             
-            # 5. Dados Diários para o Gráfico (Mantido nos últimos 30 dias)
+            # 3. Dados Diários para o Gráfico (últimos 30 dias de agendamentos CONCLUÍDOS e NÃO ARQUIVADOS)
             cur.execute("""
                 SELECT 
                     appointment_date,
@@ -888,14 +862,7 @@ HTML_TEMPLATE = f"""
                                 Cancelar Edição
                             </button>
                         </form>
-                        <div class="mb-4 flex justify-start">
-                            <div class="w-48">
-                                <label for="expense-month-filter" class="block text-sm font-medium text-gray-700">Filtrar Mês:</label>
-                                <select id="expense-month-filter" onchange="loadExpenses()" 
-                                        class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-red-500 focus:border-red-500 sm:text-sm rounded-md">
-                                    </select>
-                            </div>
-                        </div>
+
                         <!-- Lista de Serviços Atuais -->
                         <ul id="current-services-list" class="space-y-2">
                             <li class="text-center text-black p-4">Carregando lista de serviços...</li>
@@ -1760,8 +1727,7 @@ HTML_TEMPLATE = f"""
         async function loadExpenses() {{
             if (userRole !== 'admin') return; 
 
-            const monthFilter = document.getElementById('expense-month-filter')?.value || '';
-            const url = `/api/expenses${{monthFilter ? `?month=${{monthFilter}}` : ''}}`;
+            const expensesListEl = document.getElementById('current-expenses-list');
             expensesListEl.innerHTML = '<tr><td colspan="4" class="text-center text-gray-500 p-4">Carregando despesas...</td></tr>';
             
             try {{
@@ -1873,47 +1839,6 @@ HTML_TEMPLATE = f"""
             }}
         }}
 
-        // Função para popular os filtros de mês e carregar dados iniciais
-        function populateMonthFilters() {{
-            const expenseFilter = document.getElementById('expense-month-filter');
-            const dashboardFilter = document.getElementById('dashboard-month-filter');
-            
-            if (!expenseFilter || !dashboardFilter) {{
-                console.error("Filtros de mês não encontrados. Verifique o HTML.");
-                return;
-            }}
-
-            const today = new Date();
-            const monthNames = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
-
-            expenseFilter.innerHTML = '';
-            dashboardFilter.innerHTML = '';
-
-            for (let i = 0; i < 12; i++) {{
-                let d = new Date(today.getFullYear(), today.getMonth() - i, 1);
-                
-                // Formato YYYY-MM (enviado ao backend)
-                const monthValue = `${{d.getFullYear()}}-${{String(d.getMonth() + 1).padStart(2, '0')}}`;
-                const monthText = `${{monthNames[d.getMonth()]}} / ${{d.getFullYear()}}`;
-                
-                let option = new Option(monthText, monthValue);
-                
-                expenseFilter.add(option.cloneNode(true));
-                dashboardFilter.add(option.cloneNode(true));
-
-                // Seleciona o mês atual (i=0) por padrão
-                if (i === 0) {{
-                    expenseFilter.value = monthValue;
-                    dashboardFilter.value = monthValue;
-                }}
-            }}
-            
-            // Força o carregamento dos dados do mês atual para preencher as telas
-            loadExpenses();
-            loadDashboardData(); 
-        }}
-        
-        
         // --- Inicialização da Aplicação (Mantida) ---
         window.onload = function() {{
             // Define a data atual no campo de despesa
@@ -1945,13 +1870,7 @@ HTML_TEMPLATE = f"""
                 }});
         }};
 
-        window.onload = function() {{
-            populateMonthFilters(); // <--- CHAMA O FILTRO
-            // Já logado como admin, carrega a primeira aba
-            changeAdminTab('dashboard-tab'); 
-        }}
-        
-        
+
         // --- EXPOSIÇÃO GLOBAL DE FUNÇÕES ---
         window.changeView = changeView;
         window.handleAppointmentSubmit = handleAppointmentSubmit;
@@ -1962,10 +1881,6 @@ HTML_TEMPLATE = f"""
         window.clearServiceForm = clearServiceForm;
         window.editService = editService;
         window.deleteService = deleteService;
-        window.loadExpenses = loadExpenses; 
-        window.loadDashboardData = loadDashboardData;
-        window.populateMonthFilters = populateMonthFilters; // <--- ADICIONE ESTA LINHA!
-        
         
         // Expondo funções de despesa e arquivamento
         window.handleExpenseSubmit = handleExpenseSubmit;
