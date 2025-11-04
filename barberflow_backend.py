@@ -511,15 +511,31 @@ def manage_expenses():
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if request.method == 'GET':
-                # Pega despesas do mês atual
-                cur.execute("""
-                    SELECT id, description, amount, expense_date 
-                    FROM monthly_expenses
-                    WHERE EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE)
-                    AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)
-                    ORDER BY expense_date DESC;
-                """)
+                # 1. NOVO: Pega o filtro de mês do frontend (YYYY-MM)
+                month_filter = request.args.get('month') 
+
+                if month_filter:
+                    # Se um mês foi selecionado no filtro (o que é o ideal):
+                    # Filtra a tabela monthly_expenses pelo mês/ano exato.
+                    cur.execute("""
+                        SELECT id, description, amount, expense_date 
+                        FROM monthly_expenses
+                        WHERE TO_CHAR(expense_date, 'YYYY-MM') = %s
+                        ORDER BY expense_date DESC;
+                    """, (month_filter,))
+                else:
+                    # FALLBACK: Se o filtro estiver vazio (ex: se o JS falhar ou você adicionar 'Todos os Meses'):
+                    # Mantém a lógica original de mostrar apenas o mês atual.
+                    cur.execute("""
+                        SELECT id, description, amount, expense_date 
+                        FROM monthly_expenses
+                        WHERE EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE)
+                        AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)
+                        ORDER BY expense_date DESC;
+                    """)
+                
                 expenses = cur.fetchall()
+                # ... (o restante do seu código para formatar a saída, que deve ser mantido)
                 for exp in expenses:
                     exp['expense_date'] = exp['expense_date'].strftime('%d-%m-%Y')
                     exp['amount'] = float(exp['amount'])
@@ -587,27 +603,39 @@ def get_dashboard_data():
 
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # Data Inicial do Mês
-            first_day_of_month = date.today().replace(day=1).strftime('%d-%m-%Y')
+            # 1. NOVO: Lendo o filtro de mês (YYYY-MM)
+            month_filter = request.args.get('month') 
+            
+            # 2. Definindo a Condição de Filtro SQL
+            if month_filter:
+                # Se há filtro, usamos o filtro (ex: 2025-05)
+                date_condition_sql = "TO_CHAR(appointment_date, 'YYYY-MM') = %s"
+                expense_condition_sql = "TO_CHAR(expense_date, 'YYYY-MM') = %s"
+                sql_params = (month_filter,)
+            else:
+                # Se não há filtro, usamos o mês atual (comportamento original)
+                date_condition_sql = "EXTRACT(MONTH FROM appointment_date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM appointment_date) = EXTRACT(YEAR FROM CURRENT_DATE)"
+                expense_condition_sql = "EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)"
+                sql_params = tuple() # Tupla vazia se não houver parâmetro
             
             # 1. Receita Total e Agendamentos Concluídos do Mês (Apenas Agendamentos NÃO ARQUIVADOS)
-            cur.execute("""
+            cur.execute(f"""
                 SELECT SUM(service_price) as total_revenue, COUNT(*) as completed_count
                 FROM appointments
                 WHERE status = 'Concluído' 
-                AND appointment_date >= %s;
-            """, (first_day_of_month,))
+                AND {date_condition_sql};
+            """, sql_params)
             
             revenue_result = cur.fetchone()
             total_revenue = float(revenue_result['total_revenue'] or 0.0)
             completed_count = revenue_result['completed_count'] or 0
 
             # 2. Despesas Totais do Mês
-            cur.execute("""
+            cur.execute(f"""
                 SELECT SUM(amount) as total_expenses
                 FROM monthly_expenses
-                WHERE expense_date >= %s;
-            """, (first_day_of_month,))
+                WHERE {expense_condition_sql};
+            """, sql_params)
             
             expense_result = cur.fetchone()
             total_expenses = float(expense_result['total_expenses'] or 0.0)
