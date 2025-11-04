@@ -116,11 +116,11 @@ def initialize_db():
                 print("Serviços mock inseridos.")
 
             # Adicionar despesas mock se a tabela estiver vazia
-            cur.execute("SELECT COUNT(*) FROM monthly_expenses;")
-            if cur.fetchone()[0] == 0:
-                cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Aluguel (Mock)', 1200.00);")
+           # cur.execute("SELECT COUNT(*) FROM monthly_expenses;")
+            # if cur.fetchone()[0] == 0:
+                #cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Aluguel (Mock)', 1200.00);")
                 
-                print("Despesas mock inseridas.")
+                #print("Despesas mock inseridas.")
 
         conn.commit()
     except Exception as e:
