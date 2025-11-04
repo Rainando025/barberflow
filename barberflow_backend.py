@@ -1523,27 +1523,45 @@ HTML_TEMPLATE = f"""
             }}
         }}
         
-        // Deleta Agendamento Arquivado Permanentemente (NOVA FUNÇÃO)
+        // Deleta Agendamento Arquivado Permanentemente (COM TRATAMENTO DE ERRO MELHORADO)
         async function deleteArchivedAppointment(id) {{
             if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem deletar agendamentos.', false);
             
-            // Confirmação antes de deletar permanentemente
-            if (!confirm(`Tem certeza que deseja DELETAR PERMANENTEMENTE o Agendamento #${id}? Esta ação não pode ser desfeita.`)) {{
+            if (!confirm(`Tem certeza que deseja DELETAR PERMANENTEMENTE o Agendamento #${{id}}? Esta ação não pode ser desfeita.`)) {{
                 return;
             }}
 
             showLoading(true);
             try {{
-                const response = await fetch(`/api/appointments/${id}`, {{
+                const response = await fetch(`/api/appointments/${{id}}`, {{
                     method: 'DELETE',
                     headers: {{ 'Content-Type': 'application/json' }}
                 }});
-                const result = await response.json();
 
-                if (!response.ok) throw new Error(result.message || 'Erro ao deletar permanentemente.');
+                // --- NOVO TRATAMENTO DE ERRO AQUI ---
+                // 1. Verifica se houve um redirecionamento (Sessão Expirada)
+                if (response.redirected) {{
+                     throw new Error("Sua sessão expirou. Por favor, faça login novamente.");
+                }}
+                
+                // 2. Tenta analisar a resposta como JSON
+                let result;
+                try {{
+                    result = await response.json();
+                }} catch (e) {{
+                    // Se falhar (recebeu HTML), lança um erro genérico
+                    throw new Error(`Resposta inesperada do servidor (Status ${{response.status}}). Tente novamente.`);
+                }}
+                
+                // 3. Verifica se o status HTTP foi um erro (e usa a mensagem do JSON)
+                if (!response.ok) {{
+                    throw new Error(result.message || `Erro ao deletar (Status ${{response.status}}).`);
+                }}
 
+                // Caso de Sucesso
                 openModal('Sucesso', result.message, true);
-                loadArchivedAppointments(); // Recarrega a lista para refletir a exclusão
+                loadArchivedAppointments();
+                
             }} catch (error) {{
                 console.error("Erro ao deletar agendamento:", error);
                 openModal('Erro', `Não foi possível deletar o agendamento. ${{error.message}}`, false);
