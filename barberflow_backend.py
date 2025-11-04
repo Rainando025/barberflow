@@ -1978,6 +1978,59 @@ HTML_TEMPLATE = f"""
                 }});
         }};
         
+        // Função para popular os filtros de mês - VERIFIQUE ESTA IMPLEMENTAÇÃO
+        function populateMonthFilters() {{
+            // Garante que os elementos de filtro existam
+            const expenseFilter = document.getElementById('expense-month-filter');
+            const dashboardFilter = document.getElementById('dashboard-month-filter');
+            
+            if (!expenseFilter || !dashboardFilter) {{
+                console.error("Filtros de mês (expense-month-filter ou dashboard-month-filter) não foram encontrados no HTML.");
+                return;
+            }}
+
+            const today = new Date();
+            // Nomes dos meses em português
+            const monthNames = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+
+            // 1. Limpa as opções existentes
+            expenseFilter.innerHTML = '';
+            dashboardFilter.innerHTML = '';
+
+            // 2. Adiciona uma opção padrão (para ver todos os meses)
+            let defaultOption = new Option("Todos os Meses", "");
+            expenseFilter.add(defaultOption.cloneNode(true));
+            dashboardFilter.add(defaultOption.cloneNode(true));
+
+            // 3. Gera os últimos 12 meses (ou quantos você precisar)
+            for (let i = 0; i < 12; i++) {{
+                // Calcula o mês anterior (i=0 é o mês atual)
+                let d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+                
+                // Valor que será enviado ao backend (ex: 2025-05)
+                const monthValue = `${{d.getFullYear()}}-${{String(d.getMonth() + 1).padStart(2, '0')}}`;
+                
+                // Texto que o usuário verá (ex: Maio/2025)
+                const monthText = `${{monthNames[d.getMonth()]}}/${{d.getFullYear()}}`;
+                
+                let option = new Option(monthText, monthValue);
+                
+                // Adiciona a opção em ambos os filtros
+                expenseFilter.add(option.cloneNode(true));
+                dashboardFilter.add(option.cloneNode(true));
+
+                // 4. Seleciona o mês atual por padrão e força o carregamento dos dados
+                if (i === 0) {{
+                    expenseFilter.value = monthValue;
+                    dashboardFilter.value = monthValue;
+                    // Força o carregamento dos dados do mês atual para que a tabela não fique vazia
+                    loadExpenses();
+                    loadDashboardData();
+                }}
+            }}
+        }}
+        
+        
         // Adicione este bloco NOVO:
         window.onload = function() {{
             populateMonthFilters(); // NOVO: Ativa o filtro
