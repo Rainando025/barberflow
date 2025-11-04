@@ -18,7 +18,7 @@ DB_CONFIG = {
 # Chave secreta para sessões do Flask. MUDE ESTA CHAVE em produção!
 FLASK_SECRET_KEY = 'e205e9ea1d4aaf49f7b810ef5666d7aaffad3a9f1c66dbe4763e03faffef7b90'
 ADMIN_KEY = 'barberflowadmin'
-FIXED_EXPENSES = 1500.00
+FIXED_EXPENSES = 0.00
 
 # --- Configurações de Horário para Agendamento ---
 SHOP_HOURS = [
@@ -904,7 +904,7 @@ HTML_TEMPLATE = f"""
                         <!-- Formulário de Adição de Despesa -->
                         <form id="expense-form" onsubmit="handleExpenseSubmit(event)" class="bg-gray-50 p-6 rounded-lg shadow mb-6 space-y-4">
                             <h4 class="text-lg font-medium text-gray-700">Adicionar Nova Despesa</h4>
-                            <input type="text" id="expense-description" placeholder="Descrição (Ex: Aluguel, Compra de Shampo)" required class="w-full py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                            <input type="text" id="expense-description" placeholder="Descrição (Ex: Aluguel, Energia, Produtos)" required class="w-full py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                             <div class="grid grid-cols-2 gap-4">
                                 <input type="number" id="expense-amount" placeholder="Valor (R$)" required min="0" step="0.01" class="py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                                 <input type="date" id="expense-date" required class="py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
@@ -1982,7 +1982,6 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
-
 
 
 
