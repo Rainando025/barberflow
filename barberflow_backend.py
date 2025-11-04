@@ -119,7 +119,7 @@ def initialize_db():
             cur.execute("SELECT COUNT(*) FROM monthly_expenses;")
             if cur.fetchone()[0] == 0:
                 cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Aluguel (Mock)', 1200.00);")
-                cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Energia (Mock)', 200.00);")
+                
                 print("Despesas mock inseridas.")
 
         conn.commit()
@@ -1982,6 +1982,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
