@@ -23,10 +23,10 @@ FIXED_EXPENSES = 1500.00
 # --- Configurações de Horário para Agendamento ---
 SHOP_HOURS = [
     ("09:00", "12:00"), # Manhã
-    ("13:00", "18:00")  # Tarde
+    ("14:00", "18:00")  # Tarde
 ]
 # Intervalo base para checagem de slots (todos os slots de agendamento devem ser múltiplos deste)
-SLOT_INTERVAL_MINUTES = 60
+SLOT_INTERVAL_MINUTES = 15 
 
 def time_to_minutes(time_str):
     """Converte 'HH:MM' para minutos desde meia-noite."""
@@ -414,7 +414,7 @@ def get_archived_appointments():
             cur.execute("SELECT id, barber_id, service_name, appointment_date, appointment_time, client_name, service_price, status FROM appointments WHERE is_archived = TRUE ORDER BY appointment_date DESC, appointment_time DESC;")
             appointments = cur.fetchall()
             for appt in appointments:
-                appt['appointment_date'] = appt['appointment_date'].strftime('%d-%m-%Y')
+                appt['appointment_date'] = appt['appointment_date'].strftime('%Y-%m-%d')
             return jsonify(appointments)
 
     except Exception as e:
@@ -640,12 +640,6 @@ HTML_TEMPLATE = f"""
             background-attachment: fixed;
             color: #eee;
         }}
-        
-        input, select, textarea {{
-            color: #000 !important;       /* texto preto */
-            background-color: #fff !important; /* fundo branco */
-        }}
-
         #loading-overlay {{
             z-index: 50;
         }}
@@ -668,7 +662,7 @@ HTML_TEMPLATE = f"""
                 <button id="switch-schedule" onclick="changeView('schedule')" class="px-4 py-2 text-sm font-medium rounded-full transition-colors duration-200" style="background-color: #dc2626; color: white;">
                     Agendamento Cliente
                 </button>
-                <button id="switch-admin" onclick="changeView('admin')" class="px-4 py-2 text-sm font-medium rounded-full text-black bg-gray-700 hover:bg-gray-800 transition-colors duration-200">
+                <button id="switch-admin" onclick="changeView('admin')" class="px-4 py-2 text-sm font-medium rounded-full text-white bg-gray-700 hover:bg-gray-800 transition-colors duration-200">
                     Área Barbeiro
                 </button>
             </div>
@@ -774,7 +768,7 @@ HTML_TEMPLATE = f"""
                         <div>
                             <h3 class="text-lg font-semibold text-white mb-3 mt-4">Seus Dados</h3>
                             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                <input type="text" id="client-name" placeholder="Seu Nome Completo" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 text-black rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                <input type="text" id="client-name" placeholder="Seu Nome Completo" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                                 <input type="tel" id="client-phone" placeholder="Seu Telefone (Whatsapp)" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                                 <input type="email" id="client-email" placeholder="Seu Email (Opcional)" class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                             </div>
