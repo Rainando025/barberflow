@@ -68,8 +68,7 @@ def initialize_db():
             # ------------------------------------------
 
             # Resto da criação das tabelas...
-    try:
-        with conn.cursor() as cur:
+    
             # Tabela de Serviços
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS services (
