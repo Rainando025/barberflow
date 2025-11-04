@@ -1964,6 +1964,13 @@ HTML_TEMPLATE = f"""
                     showLoading(false);
                 }});
         }};
+        
+        // Adicione este bloco NOVO:
+        window.onload = function() {{
+            populateMonthFilters(); // NOVO: Ativa o filtro
+            // Já logado como admin, carrega a primeira aba
+            changeAdminTab('dashboard-tab'); 
+        }}
 
 
         // --- EXPOSIÇÃO GLOBAL DE FUNÇÕES ---
