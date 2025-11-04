@@ -58,7 +58,16 @@ def initialize_db():
     conn = get_db_connection()
     if conn is None:
         return
+        
+        
+    try:
+        with conn.cursor() as cur:
+            # --- LIMPEZA TEMPORÁRIA DOS DADOS MOCK ---
+            cur.execute("DELETE FROM monthly_expenses WHERE description LIKE '%(Mock)%';") 
+            print("Despesas mock antigas TEMPORARIAMENTE removidas.")
+            # ------------------------------------------
 
+            # Resto da criação das tabelas...
     try:
         with conn.cursor() as cur:
             # Tabela de Serviços
