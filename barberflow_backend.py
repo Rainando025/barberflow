@@ -65,10 +65,10 @@ def initialize_db():
             # --- LIMPEZA TEMPORÁRIA DOS DADOS MOCK ---
             cur.execute("""
                 DELETE FROM monthly_expenses
-                WHERE description = 'Energia (Mock)' OR description = 'Aluguel (Mock)';
+                WHERE amount = 200.00 OR amount = 1200.00;
             """)    
                 
-            print("Despesas mock antigas TEMPORARIAMENTE removidas.")
+            print("Despesas mock AGRESSIVAMENTE removidas.")
             # ------------------------------------------
 
             # Resto da criação das tabelas...
