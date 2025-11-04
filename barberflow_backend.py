@@ -61,20 +61,7 @@ def initialize_db():
         
         
     try:
-        with conn.cursor() as cur:
-            # --- LIMPEZA TEMPORÁRIA DOS DADOS MOCK ---
-            cur.execute("""
-                DELETE FROM monthly_expenses
-                WHERE amount = 200.00 OR amount = 1200.00;
-            """)    
-                
-            print("Despesas mock AGRESSIVAMENTE removidas.")
-            # ------------------------------------------
-
-            # Resto da criação das tabelas...
-    
-            # Tabela de Serviços
-            cur.execute("""
+        with cur.execute("""
                 CREATE TABLE IF NOT EXISTS services (
                     id SERIAL PRIMARY KEY,
                     name VARCHAR(100) NOT NULL UNIQUE,
@@ -2104,6 +2091,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
