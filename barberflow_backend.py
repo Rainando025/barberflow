@@ -2006,56 +2006,62 @@ HTML_TEMPLATE = f"""
                 }});
         }};
         
-        // Função para popular os filtros de mês - VERIFIQUE ESTA IMPLEMENTAÇÃO
+        // Função para popular os filtros de mês e carregar dados iniciais
         function populateMonthFilters() {{
-            // Garante que os elementos de filtro existam
             const expenseFilter = document.getElementById('expense-month-filter');
             const dashboardFilter = document.getElementById('dashboard-month-filter');
             
             if (!expenseFilter || !dashboardFilter) {{
-                console.error("Filtros de mês (expense-month-filter ou dashboard-month-filter) não foram encontrados no HTML.");
                 return;
             }}
 
             const today = new Date();
-            // Nomes dos meses em português
             const monthNames = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
-            // 1. Limpa as opções existentes
             expenseFilter.innerHTML = '';
             dashboardFilter.innerHTML = '';
 
-            // 2. Adiciona uma opção padrão (para ver todos os meses)
+            // Opção para ver todos os meses (opcional, remova se quiser forçar o filtro)
             let defaultOption = new Option("Todos os Meses", "");
-            expenseFilter.add(defaultOption.cloneNode(true));
-            dashboardFilter.add(defaultOption.cloneNode(true));
+            // expenseFilter.add(defaultOption.cloneNode(true));
+            // dashboardFilter.add(defaultOption.cloneNode(true));
 
-            // 3. Gera os últimos 12 meses (ou quantos você precisar)
+            let currentMonthValue = '';
+
             for (let i = 0; i < 12; i++) {{
-                // Calcula o mês anterior (i=0 é o mês atual)
                 let d = new Date(today.getFullYear(), today.getMonth() - i, 1);
                 
-                // Valor que será enviado ao backend (ex: 2025-05)
+                // Formato YYYY-MM
                 const monthValue = `${{d.getFullYear()}}-${{String(d.getMonth() + 1).padStart(2, '0')}}`;
-                
-                // Texto que o usuário verá (ex: Maio/2025)
-                const monthText = `${{monthNames[d.getMonth()]}}/${{d.getFullYear()}}`;
+                const monthText = `${{monthNames[d.getMonth()]}} / ${{d.getFullYear()}}`;
                 
                 let option = new Option(monthText, monthValue);
                 
-                // Adiciona a opção em ambos os filtros
                 expenseFilter.add(option.cloneNode(true));
                 dashboardFilter.add(option.cloneNode(true));
 
-                // 4. Seleciona o mês atual por padrão e força o carregamento dos dados
+                // Seleciona o mês atual (i=0) por padrão
                 if (i === 0) {{
                     expenseFilter.value = monthValue;
                     dashboardFilter.value = monthValue;
-                    // Força o carregamento dos dados do mês atual para que a tabela não fique vazia
-                    loadExpenses();
-                    loadDashboardData();
+                    currentMonthValue = monthValue;
                 }}
             }}
+            
+            // NOVO: Chamada de Carregamento forçado após definir o filtro do mês atual
+            // A função changeAdminTab, se já estiver definida para 'dashboard-tab', 
+            // já deve chamar loadDashboardData(), mas forçar aqui garante a atualização
+            // da despesa na aba, caso a aba inicial seja 'expenses'
+            
+            // Força o carregamento dos dados do Dashboard (se a aba for a inicial)
+            // Se o dashboard é a aba padrão, loadDashboardData() já deve ser chamado pela changeAdminTab
+            
+            // Se a aba 'expenses' for a primeira a ser carregada (o que não é o caso aqui), 
+            // essa chamada seria necessária. Mas é sempre bom ter.
+            
+            // Forçamos o carregamento do mês atual para que a tela não fique vazia:
+            loadExpenses();
+            loadDashboardData(); 
         }}
         
         
