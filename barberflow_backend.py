@@ -18,15 +18,15 @@ DB_CONFIG = {
 # Chave secreta para sessões do Flask. MUDE ESTA CHAVE em produção!
 FLASK_SECRET_KEY = 'e205e9ea1d4aaf49f7b810ef5666d7aaffad3a9f1c66dbe4763e03faffef7b90'
 ADMIN_KEY = 'barberflowadmin'
-FIXED_EXPENSES = 1500.00
+FIXED_EXPENSES = 0.00
 
 # --- Configurações de Horário para Agendamento ---
 SHOP_HOURS = [
     ("09:00", "12:00"), # Manhã
-    ("14:00", "18:00")  # Tarde
+    ("13:00", "18:00")  # Tarde
 ]
 # Intervalo base para checagem de slots (todos os slots de agendamento devem ser múltiplos deste)
-SLOT_INTERVAL_MINUTES = 15 
+SLOT_INTERVAL_MINUTES = 60
 
 def time_to_minutes(time_str):
     """Converte 'HH:MM' para minutos desde meia-noite."""
@@ -116,11 +116,11 @@ def initialize_db():
                 print("Serviços mock inseridos.")
 
             # Adicionar despesas mock se a tabela estiver vazia
-            cur.execute("SELECT COUNT(*) FROM monthly_expenses;")
-            if cur.fetchone()[0] == 0:
-                cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Aluguel (Mock)', 1200.00);")
-                cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Energia (Mock)', 200.00);")
-                print("Despesas mock inseridas.")
+           # cur.execute("SELECT COUNT(*) FROM monthly_expenses;")
+            # if cur.fetchone()[0] == 0:
+                #cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Aluguel (Mock)', 1200.00);")
+                
+                #print("Despesas mock inseridas.")
 
         conn.commit()
     except Exception as e:
@@ -414,7 +414,7 @@ def get_archived_appointments():
             cur.execute("SELECT id, barber_id, service_name, appointment_date, appointment_time, client_name, service_price, status FROM appointments WHERE is_archived = TRUE ORDER BY appointment_date DESC, appointment_time DESC;")
             appointments = cur.fetchall()
             for appt in appointments:
-                appt['appointment_date'] = appt['appointment_date'].strftime('%Y-%m-%d')
+                appt['appointment_date'] = appt['appointment_date'].strftime('%d-%m-%Y')
             return jsonify(appointments)
 
     except Exception as e:
@@ -455,6 +455,34 @@ def archive_appointment(id):
         return jsonify({'message': f'Erro interno: {e}'}), 500
     finally:
         conn.close()
+        
+# --- NOVA ROTA: DELETAR AGENDAMENTO PERMANENTEMENTE ---
+
+@app.route('/api/appointments/<int:id>', methods=['DELETE'])
+def delete_appointment(id):
+    """Deleta permanentemente um agendamento pelo ID. Restrito a Admin."""
+    if get_role() != 'admin':
+        return jsonify({'message': 'Acesso negado. Apenas Barbeiros (Admin) podem deletar agendamentos.'}), 403
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({'message': 'Erro de conexão com o banco de dados'}), 500
+
+    try:
+        with conn.cursor() as cur:
+            # Exclui o agendamento permanentemente pelo ID
+            cur.execute("DELETE FROM appointments WHERE id = %s RETURNING id;", (id,))
+            if cur.fetchone():
+                conn.commit()
+                return jsonify({'message': f'Agendamento ID {id} excluído permanentemente com sucesso.'})
+            return jsonify({'message': 'Agendamento não encontrado.'}), 404
+            
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro ao deletar agendamento: {e}")
+        return jsonify({'message': f'Erro interno: {e}'}), 500
+    finally:
+        conn.close()        
 
 # --- Rotas de Despesas (Mantidas) ---
 
@@ -640,6 +668,12 @@ HTML_TEMPLATE = f"""
             background-attachment: fixed;
             color: #eee;
         }}
+        
+        input, select, textarea {{
+            color: #000 !important;       /* texto preto */
+            background-color: #fff !important; /* fundo branco */
+        }}
+
         #loading-overlay {{
             z-index: 50;
         }}
@@ -662,7 +696,7 @@ HTML_TEMPLATE = f"""
                 <button id="switch-schedule" onclick="changeView('schedule')" class="px-4 py-2 text-sm font-medium rounded-full transition-colors duration-200" style="background-color: #dc2626; color: white;">
                     Agendamento Cliente
                 </button>
-                <button id="switch-admin" onclick="changeView('admin')" class="px-4 py-2 text-sm font-medium rounded-full text-white bg-gray-700 hover:bg-gray-800 transition-colors duration-200">
+                <button id="switch-admin" onclick="changeView('admin')" class="px-4 py-2 text-sm font-medium rounded-full text-black bg-gray-700 hover:bg-gray-800 transition-colors duration-200">
                     Área Barbeiro
                 </button>
             </div>
@@ -768,7 +802,7 @@ HTML_TEMPLATE = f"""
                         <div>
                             <h3 class="text-lg font-semibold text-white mb-3 mt-4">Seus Dados</h3>
                             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                <input type="text" id="client-name" placeholder="Seu Nome Completo" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                                <input type="text" id="client-name" placeholder="Seu Nome Completo" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 text-black rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                                 <input type="tel" id="client-phone" placeholder="Seu Telefone (Whatsapp)" required class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                                 <input type="email" id="client-email" placeholder="Seu Email (Opcional)" class="col-span-3 md:col-span-1 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                             </div>
@@ -870,7 +904,7 @@ HTML_TEMPLATE = f"""
                         <!-- Formulário de Adição de Despesa -->
                         <form id="expense-form" onsubmit="handleExpenseSubmit(event)" class="bg-gray-50 p-6 rounded-lg shadow mb-6 space-y-4">
                             <h4 class="text-lg font-medium text-gray-700">Adicionar Nova Despesa</h4>
-                            <input type="text" id="expense-description" placeholder="Descrição (Ex: Aluguel, Compra de Shampo)" required class="w-full py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
+                            <input type="text" id="expense-description" placeholder="Descrição (Ex: Aluguel, Energia, Produtos)" required class="w-full py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                             <div class="grid grid-cols-2 gap-4">
                                 <input type="number" id="expense-amount" placeholder="Valor (R$)" required min="0" step="0.01" class="py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
                                 <input type="date" id="expense-date" required class="py-2 border border-gray-300 rounded-lg shadow-sm focus:ring-red-500 focus:border-red-500">
@@ -1359,8 +1393,16 @@ HTML_TEMPLATE = f"""
                     // Botão de Arquivar para lista ATIVA
                     actionButton = `<button onclick="archiveAppointment(${{appointmentId}}, true)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-gray-500 hover:bg-gray-600 transition-colors duration-200">Arquivar</button>`;
                 }} else {{
-                    // Botão de Desarquivar para lista ARQUIVADA
-                    actionButton = `<button onclick="archiveAppointment(${{appointmentId}}, false)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200">Desarquivar</button>`;
+                
+                    // Botões para lista ARQUIVADA (Desarquivar e Excluir)
+                    actionButton = `
+                        <button onclick="archiveAppointment(${{appointmentId}}, false)" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200 mr-2">
+                            Desarquivar
+                        </button>
+                        <button onclick="deleteArchivedAppointment(${{appointmentId}})" class="px-3 py-1 text-xs font-medium rounded-full text-white bg-red-600 hover:bg-red-700 transition-colors duration-200">
+                            Excluir Permanentemente
+                        </button>
+                    `;
                 }}
                 
                 const appointmentHtml = `
@@ -1476,6 +1518,53 @@ HTML_TEMPLATE = f"""
             }} catch (error) {{
                 console.error("Erro ao atualizar status:", error);
                 openModal('Erro', `Não foi possível atualizar o status. ${{error.message}}`, false);
+            }} finally {{
+                showLoading(false);
+            }}
+        }}
+        
+        // Deleta Agendamento Arquivado Permanentemente (COM TRATAMENTO DE ERRO MELHORADO)
+        async function deleteArchivedAppointment(id) {{
+            if (userRole !== 'admin') return openModal('Permissão Negada', 'Apenas Barbeiros (Admin) podem deletar agendamentos.', false);
+            
+            if (!confirm(`Tem certeza que deseja DELETAR PERMANENTEMENTE o Agendamento #${{id}}? Esta ação não pode ser desfeita.`)) {{
+                return;
+            }}
+
+            showLoading(true);
+            try {{
+                const response = await fetch(`/api/appointments/${{id}}`, {{
+                    method: 'DELETE',
+                    headers: {{ 'Content-Type': 'application/json' }}
+                }});
+
+                // --- NOVO TRATAMENTO DE ERRO AQUI ---
+                // 1. Verifica se houve um redirecionamento (Sessão Expirada)
+                if (response.redirected) {{
+                     throw new Error("Sua sessão expirou. Por favor, faça login novamente.");
+                }}
+                
+                // 2. Tenta analisar a resposta como JSON
+                let result;
+                try {{
+                    result = await response.json();
+                }} catch (e) {{
+                    // Se falhar (recebeu HTML), lança um erro genérico
+                    throw new Error(`Resposta inesperada do servidor (Status ${{response.status}}). Tente novamente.`);
+                }}
+                
+                // 3. Verifica se o status HTTP foi um erro (e usa a mensagem do JSON)
+                if (!response.ok) {{
+                    throw new Error(result.message || `Erro ao deletar (Status ${{response.status}}).`);
+                }}
+
+                // Caso de Sucesso
+                openModal('Sucesso', result.message, true);
+                loadArchivedAppointments();
+                
+            }} catch (error) {{
+                console.error("Erro ao deletar agendamento:", error);
+                openModal('Erro', `Não foi possível deletar o agendamento. ${{error.message}}`, false);
             }} finally {{
                 showLoading(false);
             }}
@@ -1874,7 +1963,7 @@ HTML_TEMPLATE = f"""
         window.handleServiceSubmit = handleServiceSubmit;
         window.clearServiceForm = clearServiceForm;
         window.editService = editService;
-        window.deleteService = deleteService;
+        window.deleteArchivedAppointment = deleteArchivedAppointment;
         
         // Expondo funções de despesa e arquivamento
         window.handleExpenseSubmit = handleExpenseSubmit;
@@ -1893,7 +1982,6 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
-
 
 
 
