@@ -58,10 +58,11 @@ def initialize_db():
     conn = get_db_connection()
     if conn is None:
         return
-        
-        
+
     try:
-        with cur.execute("""
+        with conn.cursor() as cur:
+            # Tabela de Serviços
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS services (
                     id SERIAL PRIMARY KEY,
                     name VARCHAR(100) NOT NULL UNIQUE,
@@ -2091,6 +2092,7 @@ HTML_TEMPLATE = f"""
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
