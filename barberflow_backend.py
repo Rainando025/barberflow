@@ -692,11 +692,11 @@ HTML_TEMPLATE = f"""
             <h1 class="text-3xl font-extrabold text-white tracking-tight">Barber<span class="text-red-500">Flow</span></h1>
             
             <!-- Seletor de Modo (Switch de Agendamento para Admin) -->
-            <div id="view-switch-container" class="flex items-center space-x-4">
-                <button id="switch-schedule" onclick="changeView('schedule')" class="px-4 py-2 text-sm font-medium rounded-full transition-colors duration-200" style="background-color: #dc2626; color: white;">
+            <div id="view-switch-container" class="-mb-px flex space-x-4 md:space-x-8 overflow-x-auto pb-2">
+                <button id="switch-schedule" onclick="changeView('schedule')" class="px-2 py-2 text-sm font-medium rounded-full transition-colors duration-200" style="background-color: #dc2626; color: white;">
                     Agendamento Cliente
                 </button>
-                <button id="switch-admin" onclick="changeView('admin')" class="px-4 py-2 text-sm font-medium rounded-full text-black bg-gray-700 hover:bg-gray-800 transition-colors duration-200">
+                <button id="switch-admin" onclick="changeView('admin')" class="px-2 py-2 text-sm font-medium rounded-full text-black bg-gray-700 hover:bg-gray-800 transition-colors duration-200">
                     Área Barbeiro
                 </button>
             </div>
@@ -825,7 +825,7 @@ HTML_TEMPLATE = f"""
 
                 <!-- Tabs de Navegação -->
                 <div class="border-b border-gray-200">
-                    <nav class="-mb-px flex space-x-8" aria-label="Tabs">
+                    <nav class="-mb-px flex space-x-4 md:space-x-8 overflow-x-auto pb-2" aria-label="Tabs">
                         <button onclick="changeAdminTab('appointments')" id="tab-appointments" class="tab-button border-b-2 py-4 px-1 text-sm font-medium whitespace-nowrap border-red-500 text-red-600">
                             Agendamentos Ativos
                         </button>
