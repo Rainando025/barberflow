@@ -72,7 +72,7 @@ def initialize_db():
         """)
 
             # Tabela de Agendamentos (Adicionando a coluna is_archived no SQL base para garantir)
-            cur.execute("""
+        cur.execute("""
                 CREATE TABLE IF NOT EXISTS appointments (
                     id SERIAL PRIMARY KEY,
                     barber_id VARCHAR(50) NOT NULL,
@@ -91,7 +91,7 @@ def initialize_db():
             """)
 
             # Tabela de Despesas Mensais
-            cur.execute("""
+        cur.execute("""
                 CREATE TABLE IF NOT EXISTS monthly_expenses (
                     id SERIAL PRIMARY KEY,
                     description VARCHAR(255) NOT NULL,
@@ -1964,6 +1964,7 @@ if __name__ == '__main__':
     # No Render, a porta é definida pela variável de ambiente PORT
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
