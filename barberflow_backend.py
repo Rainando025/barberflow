@@ -8,6 +8,8 @@ from datetime import datetime, date
 # --- 1. CONFIGURAÇÃO E CONEXÃO COM POSTGRESQL ---
 # ATENÇÃO: Substitua estas variáveis pelas suas credenciais reais do PostgreSQL.
 DATABASE_URL = os.environ.get('DATABASE_URL')
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Chave secreta para sessões do Flask. MUDE ESTA CHAVE em produção!
 FLASK_SECRET_KEY = 'e205e9ea1d4aaf49f7b810ef5666d7aaffad3a9f1c66dbe4763e03faffef7b90'
@@ -39,19 +41,24 @@ def minutes_to_time(total_minutes):
 # --- Fim das Funções de Horário ---
 
 def get_db_connection():
-    """Estabelece conexão com o banco de dados no Supabase usando a DATABASE_URL."""
+    """Estabelece conexão com o banco de dados no Supabase com suporte a SSL."""
     try:
-        # O psycopg2 aceita a URL completa diretamente
-        conn = psycopg2.connect(DATABASE_URL)
+        if not DATABASE_URL:
+            print("ERRO: Variável de ambiente DATABASE_URL não encontrada.")
+            return None
+            
+        # O sslmode='require' é fundamental para bancos de dados na nuvem como Supabase/Render
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
         return conn
     except Exception as e:
         print(f"Erro ao conectar ao banco de dados no Supabase: {e}")
         return None
 
 def initialize_db():
-    """Cria as tabelas Services, Appointments, Monthly_Expenses e garante a coluna 'is_archived'."""
+    """Cria as tabelas necessárias no Supabase se não existirem."""
     conn = get_db_connection()
-    if conn is None:
+    if not conn:
+        print("Não foi possível inicializar o banco: Falha na conexão.")
         return
 
     try:
@@ -1979,6 +1986,7 @@ if __name__ == '__main__':
     # No Render, a porta é definida pela variável de ambiente PORT
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
