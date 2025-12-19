@@ -7,13 +7,7 @@ from datetime import datetime, date
 
 # --- 1. CONFIGURAÇÃO E CONEXÃO COM POSTGRESQL ---
 # ATENÇÃO: Substitua estas variáveis pelas suas credenciais reais do PostgreSQL.
-DB_CONFIG = {
-    'database': os.environ.get('PG_DB', 'barberflow_db'),
-    'user': os.environ.get('PG_USER', 'postgres'),
-    'password': os.environ.get('PG_PASSWORD', ''),
-    'host': os.environ.get('PG_HOST', 'localhost'),
-    'port': os.environ.get('PG_PORT', '5433')
-}
+DATABASE_URL = os.environ.get('DATABASE_URL')
 
 # Chave secreta para sessões do Flask. MUDE ESTA CHAVE em produção!
 FLASK_SECRET_KEY = 'e205e9ea1d4aaf49f7b810ef5666d7aaffad3a9f1c66dbe4763e03faffef7b90'
@@ -45,12 +39,13 @@ def minutes_to_time(total_minutes):
 # --- Fim das Funções de Horário ---
 
 def get_db_connection():
-    """Cria e retorna uma conexão com o banco de dados."""
+    """Estabelece conexão com o banco de dados no Supabase usando a DATABASE_URL."""
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
+        # O psycopg2 aceita a URL completa diretamente
+        conn = psycopg2.connect(DATABASE_URL)
         return conn
     except Exception as e:
-        print(f"Erro ao conectar ao PostgreSQL: {e}")
+        print(f"Erro ao conectar ao banco de dados no Supabase: {e}")
         return None
 
 def initialize_db():
@@ -1981,7 +1976,10 @@ HTML_TEMPLATE = f"""
 """
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # No Render, a porta é definida pela variável de ambiente PORT
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
+
 
 
 
