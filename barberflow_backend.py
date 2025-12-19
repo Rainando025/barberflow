@@ -41,37 +41,35 @@ def minutes_to_time(total_minutes):
 # --- Fim das Funções de Horário ---
 
 def get_db_connection():
-    """Estabelece conexão com o banco de dados no Supabase com suporte a SSL."""
+    """Conexão robusta com Supabase (SSL e IPv4 compatibility)."""
     try:
         if not DATABASE_URL:
-            print("ERRO: Variável de ambiente DATABASE_URL não encontrada.")
             return None
-            
-        # O sslmode='require' é fundamental para bancos de dados na nuvem como Supabase/Render
-        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+        # sslmode='require' é obrigatório para Supabase
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require', connect_timeout=10)
         return conn
     except Exception as e:
-        print(f"Erro ao conectar ao banco de dados no Supabase: {e}")
+        print(f"Erro de conexão: {e}")
         return None
 
 def initialize_db():
-    """Cria as tabelas necessárias no Supabase se não existirem."""
+    """Cria as tabelas se elas não existirem. Roda sempre no início do app."""
     conn = get_db_connection()
-    if not conn:
-        print("Não foi possível inicializar o banco: Falha na conexão.")
+    if not conn: 
+        print("ERRO: Não foi possível conectar ao banco para inicializar.")
         return
-
     try:
-        with conn.cursor() as cur:
-            # Tabela de Serviços
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS services (
-                    id SERIAL PRIMARY KEY,
-                    name VARCHAR(100) NOT NULL UNIQUE,
-                    price NUMERIC(10, 2) NOT NULL,
-                    duration INTEGER NOT NULL
-                );
-            """)
+        cur = conn.cursor()
+        
+        # Tabela de Serviços
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS services (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                price DECIMAL(10,2) NOT NULL,
+                duration INTEGER NOT NULL
+            );
+        """)
 
             # Tabela de Agendamentos (Adicionando a coluna is_archived no SQL base para garantir)
             cur.execute("""
@@ -88,16 +86,9 @@ def initialize_db():
                     status VARCHAR(20) NOT NULL DEFAULT 'Agendado',
                     is_archived BOOLEAN NOT NULL DEFAULT FALSE, -- NOVA COLUNA
                     created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                    UNIQUE (barber_id, appointment_date, appointment_time) -- Garante unicidade
+                   
                 );
             """)
-            
-            # Tenta adicionar a coluna is_archived se não existir
-            try:
-                cur.execute("ALTER TABLE appointments ADD COLUMN is_archived BOOLEAN NOT NULL DEFAULT FALSE;")
-                print("Coluna 'is_archived' adicionada à tabela appointments (se não existisse).")
-            except psycopg2.errors.DuplicateColumn:
-                pass # Coluna já existe, ignora o erro
 
             # Tabela de Despesas Mensais
             cur.execute("""
@@ -109,25 +100,12 @@ def initialize_db():
                 );
             """)
 
-            # Adicionar serviços mock se a tabela estiver vazia
-            cur.execute("SELECT COUNT(*) FROM services;")
-            if cur.fetchone()[0] == 0:
-                cur.execute("INSERT INTO services (name, price, duration) VALUES ('Corte Simples', 35.00, 45);")
-                cur.execute("INSERT INTO services (name, price, duration) VALUES ('Design de Barba', 25.00, 30);")
-                cur.execute("INSERT INTO services (name, price, duration) VALUES ('Corte + Barba', 55.00, 75);")
-                print("Serviços mock inseridos.")
-
-            # Adicionar despesas mock se a tabela estiver vazia
-           # cur.execute("SELECT COUNT(*) FROM monthly_expenses;")
-            # if cur.fetchone()[0] == 0:
-                #cur.execute("INSERT INTO monthly_expenses (description, amount) VALUES ('Aluguel (Mock)', 1200.00);")
-                
-                #print("Despesas mock inseridas.")
-
+        
         conn.commit()
+        cur.close()
+        print("Estrutura do banco de dados verificada/criada com sucesso.")
     except Exception as e:
-        print(f"Erro ao inicializar o banco de dados: {e}")
-        conn.rollback()
+        print(f"Erro ao inicializar tabelas: {e}")
     finally:
         conn.close()
 
@@ -1986,6 +1964,7 @@ if __name__ == '__main__':
     # No Render, a porta é definida pela variável de ambiente PORT
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
