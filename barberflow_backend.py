@@ -1681,7 +1681,7 @@ HTML_TEMPLATE = f"""
                     const formattedPrice = parseFloat(service.price).toFixed(2).replace('.', ',');
                     
                     const listItem = `
-                        <li id="svc-${{service.id}}" class="p-3 bg-white rounded-lg shadow flex justify-between items-center">
+                        <li id="svc-${{service.id}}" class="p-3 bg-black rounded-lg shadow flex justify-between items-center">
                             <div>
                                 ${{service.name}} <span class="font-bold text-red-600">R$ ${{formattedPrice}}</span>
                                 <span class="text-sm text-gray-500 ml-2">(${{service.duration}} min)</span>
@@ -1964,6 +1964,7 @@ if __name__ == '__main__':
     # No Render, a porta é definida pela variável de ambiente PORT
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
