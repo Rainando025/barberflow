@@ -13,7 +13,7 @@ if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
 
 # Chave secreta para sessões do Flask. MUDE ESTA CHAVE em produção!
 FLASK_SECRET_KEY = 'e205e9ea1d4aaf49f7b810ef5666d7aaffad3a9f1c66dbe4763e03faffef7b90'
-ADMIN_KEY = 'barberflowadmin'
+ADMIN_KEY = 'franklinbarber'
 FIXED_EXPENSES = 0.00
 
 # --- Configurações de Horário para Agendamento ---
@@ -122,7 +122,11 @@ def get_role():
     return session.get('role', 'none')
 
 
-
+# --- NOVA ROTA PARA O CRON-JOB (HEALTH CHECK) ---
+@app.route('/health')
+def health_check():
+    """Rota leve para manter o Render acordado sem estourar o limite do Cron-job."""
+    return "OK", 200
 # --- Rotas de Autenticação e Configuração (Mantidas) ---
 
 @app.route('/', methods=['GET'])
@@ -1964,6 +1968,7 @@ if __name__ == '__main__':
     # No Render, a porta é definida pela variável de ambiente PORT
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
